@@ -28,11 +28,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod crypt;
 pub mod driver;
 pub mod error;
 pub mod query;
 pub mod rsfb;
 
+pub use crypt::CryptState;
 pub use driver::{ConnectMode, DbDriver};
 pub use error::DbError;
 pub use query::{Column, ColumnValue, QueryResult, Row};

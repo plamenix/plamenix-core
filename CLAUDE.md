@@ -14,6 +14,10 @@ covers concerns specific to this repository.
   (manifest parsing, capability grammar, wasmtime engine wrapper,
   bundle loader). Phase A: load + validate; Phase B: activate; Phase C:
   sample plugin + end-to-end test.
+- `crates/plamenix-secrets/` — OS keyring wrapper (macOS Keychain,
+  Windows Credential Manager, Linux Secret Service) behind the
+  `SecretStore` trait. `KeyringStore` for production, `InMemoryStore`
+  for tests.
 - More crates accrete here as concrete use cases arrive. Crates are
   added in the PR that first needs them, not pre-scaffolded.
 

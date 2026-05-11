@@ -8,6 +8,7 @@
 use async_trait::async_trait;
 use plamenix_types::{ConnectionConfig, SessionId};
 
+use crate::crypt::CryptState;
 use crate::error::DbError;
 use crate::query::QueryResult;
 
@@ -59,4 +60,9 @@ pub trait DbDriver: Send + Sync {
     /// Detaches the session. After this returns, the `SessionId` is no
     /// longer valid for any call on this driver.
     async fn close(&self, session: SessionId) -> Result<(), DbError>;
+
+    /// Reads `MON$DATABASE.MON$CRYPT_STATE` and returns the typed
+    /// [`CryptState`]. Used by the UI status badge and by the
+    /// `encryption_required` check inside [`Self::connect`].
+    async fn crypt_state(&self, session: SessionId) -> Result<CryptState, DbError>;
 }

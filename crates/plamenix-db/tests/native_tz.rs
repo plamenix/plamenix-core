@@ -26,9 +26,7 @@
 #![cfg(feature = "native")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use plamenix_db::{
-    ColumnValue, ConnectMode, ConnectionConfig, DbDriver, QueryResult, RsfbDriver,
-};
+use plamenix_db::{ColumnValue, ConnectMode, ConnectionConfig, DbDriver, QueryResult, RsfbDriver};
 
 const FBCLIENT_PATH_ENV: &str = "PLAMENIX_FBCLIENT_PATH";
 const HOST: &str = "127.0.0.1";
@@ -36,16 +34,18 @@ const PORT: u16 = 3050;
 const DB_PATH: &str = "/var/lib/firebird/data/test.fdb";
 
 fn live_config() -> Option<ConnectionConfig> {
-    std::env::var(FBCLIENT_PATH_ENV).ok().map(|fbclient_path| ConnectionConfig {
-        host: HOST.into(),
-        port: PORT,
-        database: DB_PATH.into(),
-        user: "SYSDBA".into(),
-        password: "masterkey".into(),
-        encryption_key: None,
-        fbclient_path: Some(fbclient_path),
-        encryption_required: false,
-    })
+    std::env::var(FBCLIENT_PATH_ENV)
+        .ok()
+        .map(|fbclient_path| ConnectionConfig {
+            host: HOST.into(),
+            port: PORT,
+            database: DB_PATH.into(),
+            user: "SYSDBA".into(),
+            password: "masterkey".into(),
+            encryption_key: None,
+            fbclient_path: Some(fbclient_path),
+            encryption_required: false,
+        })
 }
 
 #[tokio::test]

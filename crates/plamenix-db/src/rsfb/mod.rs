@@ -27,6 +27,7 @@ use plamenix_types::{ConnectionConfig, SessionId};
 use rsfbclient::{Execute, Queryable, Row as RsfbRow, SimpleConnection, SqlType};
 use tokio::sync::Mutex;
 
+use crate::crypt::CryptState;
 use crate::driver::{ConnectMode, DbDriver};
 use crate::error::DbError;
 use crate::query::{Column, ColumnValue, QueryResult, Row};
@@ -63,6 +64,7 @@ impl DbDriver for RsfbDriver {
         config: ConnectionConfig,
         mode: ConnectMode,
     ) -> Result<SessionId, DbError> {
+        let encryption_required = config.encryption_required;
         let conn = tokio::task::spawn_blocking(move || build_connection(&config, &mode)).await??;
 
         let id = SessionId::new();
@@ -70,6 +72,25 @@ impl DbDriver for RsfbDriver {
 
         self.sessions.lock().await.insert(id, shared);
         tracing::info!(?id, "session attached");
+
+        if encryption_required {
+            match self.crypt_state(id).await {
+                Ok(state) if state.is_encrypted() => {}
+                Ok(state) => {
+                    let _ = self.close(id).await;
+                    return Err(DbError::Connect(format!(
+                        "encryption_required: database MON$CRYPT_STATE is {state:?}",
+                    )));
+                }
+                Err(err) => {
+                    let _ = self.close(id).await;
+                    return Err(DbError::Connect(format!(
+                        "encryption_required: could not read MON$CRYPT_STATE: {err}",
+                    )));
+                }
+            }
+        }
+
         Ok(id)
     }
 
@@ -99,6 +120,15 @@ impl DbDriver for RsfbDriver {
         } else {
             Err(DbError::Driver(format!("unknown session: {session:?}")))
         }
+    }
+
+    async fn crypt_state(&self, session: SessionId) -> Result<CryptState, DbError> {
+        let shared = self.shared_conn(session).await?;
+        tokio::task::spawn_blocking(move || {
+            let mut guard = shared.blocking_lock();
+            run_crypt_state(&mut guard)
+        })
+        .await?
     }
 }
 
@@ -208,6 +238,14 @@ fn run_statement(conn: &mut SimpleConnection, sql: &str) -> Result<QueryResult, 
         columns,
         rows: mapped_rows,
     })
+}
+
+fn run_crypt_state(conn: &mut SimpleConnection) -> Result<CryptState, DbError> {
+    let rows: Vec<(i64,)> = conn
+        .query("SELECT MON$CRYPT_STATE FROM MON$DATABASE", ())
+        .map_err(DbError::from)?;
+    let value = rows.into_iter().next().map_or(0, |(v,)| v);
+    CryptState::from_raw(value)
 }
 
 fn run_ping(conn: &mut SimpleConnection) -> Result<String, DbError> {

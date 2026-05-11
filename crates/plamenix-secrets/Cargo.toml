@@ -1,0 +1,30 @@
+[package]
+name = "plamenix-secrets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OS keyring wrapper for Plamenix — stores passwords and encryption keys."
+publish = false
+
+[features]
+# Default to the platform-native keyring backends. Consumers that need
+# a different backend (encrypted file, headless CI) layer it on via the
+# upstream `keyring` crate's feature flags.
+default = ["native"]
+native = [
+    "keyring/apple-native",
+    "keyring/windows-native",
+    "keyring/sync-secret-service",
+    "keyring/crypto-rust",
+]
+
+[dependencies]
+keyring.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

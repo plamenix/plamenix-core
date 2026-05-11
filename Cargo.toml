@@ -25,9 +25,11 @@ toml = "0.9"
 semver = "1"
 wasmtime = { version = "27", default-features = false, features = ["runtime", "cranelift", "component-model", "async"] }
 wasmtime-wasi = { version = "27" }
+keyring = { version = "3", default-features = false }
 plamenix-types = { path = "crates/plamenix-types" }
 plamenix-db = { path = "crates/plamenix-db" }
 plamenix-plugin-host = { path = "crates/plamenix-plugin-host" }
+plamenix-secrets = { path = "crates/plamenix-secrets" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

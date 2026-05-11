@@ -29,6 +29,7 @@ keyring = { version = "3", default-features = false }
 plamenix-types = { path = "crates/plamenix-types" }
 plamenix-db = { path = "crates/plamenix-db" }
 plamenix-plugin-host = { path = "crates/plamenix-plugin-host" }
+plamenix-plugin-sdk = { path = "crates/plamenix-plugin-sdk" }
 plamenix-secrets = { path = "crates/plamenix-secrets" }
 plamenix-profiles = { path = "crates/plamenix-profiles" }
 

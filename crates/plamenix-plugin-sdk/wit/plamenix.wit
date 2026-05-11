@@ -1,0 +1,45 @@
+// Plamenix plugin interface, version 1.0.
+//
+// Plugins are WASM Component Model components that target this world.
+// The host implements the imported `host` interface; plugins export
+// the `plugin` interface. Breaking changes to this WIT package mint a
+// new package version (e.g. `plamenix:plugin@2.0.0`); the host can
+// load plugins targeting multiple versions side by side.
+
+package plamenix:plugin@1.0.0;
+
+interface host {
+    /// Severity levels for plugin-emitted log lines.
+    enum log-level {
+        trace,
+        debug,
+        info,
+        warn,
+        error,
+    }
+
+    /// Forwards a log line from the plugin to the host tracing pipeline.
+    log: func(level: log-level, message: string);
+
+    /// Returns the host's SemVer string (e.g. "1.0.0-beta").
+    host-version: func() -> string;
+}
+
+interface plugin {
+    /// Outcome of a plugin-side `activate` call.
+    variant activation {
+        ok,
+        failed(string),
+    }
+
+    /// Called once after the plugin component instantiates. The plugin
+    /// uses this opportunity to register contribution points with the
+    /// host (a future revision will expose richer register* host
+    /// functions for this).
+    activate: func() -> activation;
+}
+
+world plamenix-plugin {
+    import host;
+    export plugin;
+}

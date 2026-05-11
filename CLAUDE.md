@@ -17,6 +17,10 @@ covers concerns specific to this repository.
   `runtime.requires_subprocess` in the manifest route through the
   native-binary subprocess activator instead of the WASM pipeline; the
   protocol is documented at the top of `src/subprocess.rs`.
+- `crates/plamenix-plugin-sdk/` — plugin authoring SDK. Ships the
+  `plamenix:plugin` WIT contract (verbatim copy) plus a subprocess
+  protocol helper (`subprocess::run`) for native plugins. External
+  authors depend on this crate, not on `plamenix-plugin-host`.
 - `crates/plamenix-secrets/` — OS keyring wrapper (macOS Keychain,
   Windows Credential Manager, Linux Secret Service) behind the
   `SecretStore` trait. `KeyringStore` for production, `InMemoryStore`

@@ -1,0 +1,40 @@
+[package]
+name = "plamenix-db"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Plamenix Firebird driver — DbDriver trait and rsfbclient-backed implementation."
+publish = false
+
+[features]
+# Default to pure-rust so the crate compiles cleanly in CI without
+# fbclient on the build host. Production installers (desktop + web)
+# always enable both features explicitly.
+default = ["pure-rust"]
+
+# Native fbclient backend. Plamenix's main mode in production: the
+# bundled `fbclient` library is loaded at runtime via `with_dyn_load`.
+# The `linking` feature also lets builds compile-time link when desired.
+native = ["rsfbclient/linking", "rsfbclient/dynamic_loading"]
+
+# Pure-Rust wire-protocol backend kept as a fallback for environments
+# without an fbclient binary. Limited feature coverage; see
+# `../../docs/firebird-driver.md`.
+pure-rust = ["rsfbclient/pure_rust"]
+
+[dependencies]
+plamenix-types.workspace = true
+rsfbclient.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
+
+[lints]
+workspace = true

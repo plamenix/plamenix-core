@@ -1,0 +1,36 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo.lock is committed for reproducible builds, even though this is a
+# library workspace. Modern guidance favours checking it in for CI
+# determinism; consuming applications still pick their own lock.
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+.idea/
+*.swp
+*.swo
+*~
+
+# Local overrides
+.env.local
+*.local
+.envrc
+
+# Coverage / benches output
+/tarpaulin-report.html
+/cobertura.xml
+/criterion/

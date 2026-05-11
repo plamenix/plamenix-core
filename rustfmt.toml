@@ -1,0 +1,12 @@
+edition = "2024"
+max_width = 100
+reorder_imports = true
+reorder_modules = true
+newline_style = "Unix"
+use_field_init_shorthand = true
+use_try_shorthand = true
+
+# Stable rustfmt only. The following are nightly-only and will be enabled
+# once CI runs a nightly fmt step:
+#   imports_granularity = "Crate"
+#   group_imports       = "StdExternalCrate"

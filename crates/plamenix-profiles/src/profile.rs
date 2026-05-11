@@ -33,6 +33,7 @@ impl Default for ProfileId {
 
 /// A saved connection profile.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Profile {
     /// Stable identifier.
     pub id: ProfileId,

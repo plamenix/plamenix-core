@@ -1706,6 +1706,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "plamenix-profiles"
+version = "1.0.0-beta"
+dependencies = [
+ "plamenix-secrets",
+ "plamenix-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "plamenix-secrets"
 version = "1.0.0-beta"
 dependencies = [

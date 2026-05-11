@@ -1,0 +1,24 @@
+[package]
+name = "plamenix-profiles"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Connection profile persistence for Plamenix — JSON-on-disk store with keyring-backed secrets."
+publish = false
+
+[dependencies]
+plamenix-types.workspace = true
+plamenix-secrets.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

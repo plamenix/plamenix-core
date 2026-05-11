@@ -18,6 +18,10 @@ covers concerns specific to this repository.
   Windows Credential Manager, Linux Secret Service) behind the
   `SecretStore` trait. `KeyringStore` for production, `InMemoryStore`
   for tests.
+- `crates/plamenix-profiles/` — saved connection profiles. `Profile`
+  struct + `JsonFileStore` (atomic JSON-on-disk) + the
+  `resolve_connection_config` helper that fetches secrets via
+  `plamenix-secrets` and merges runtime overrides at connect time.
 - More crates accrete here as concrete use cases arrive. Crates are
   added in the PR that first needs them, not pre-scaffolded.
 

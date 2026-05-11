@@ -30,6 +30,7 @@ plamenix-types = { path = "crates/plamenix-types" }
 plamenix-db = { path = "crates/plamenix-db" }
 plamenix-plugin-host = { path = "crates/plamenix-plugin-host" }
 plamenix-secrets = { path = "crates/plamenix-secrets" }
+plamenix-profiles = { path = "crates/plamenix-profiles" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

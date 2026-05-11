@@ -6,7 +6,7 @@
 //! caller actually needs it.
 
 use async_trait::async_trait;
-use plamenix_types::{ConnectionConfig, SessionId};
+use plamenix_types::{ConnectionConfig, Schema, SessionId};
 
 use crate::crypt::CryptState;
 use crate::error::DbError;
@@ -65,4 +65,11 @@ pub trait DbDriver: Send + Sync {
     /// [`CryptState`]. Used by the UI status badge and by the
     /// `encryption_required` check inside [`Self::connect`].
     async fn crypt_state(&self, session: SessionId) -> Result<CryptState, DbError>;
+
+    /// Returns the catalogue of tables and views visible to `session`.
+    ///
+    /// Filters out system relations via `RDB$SYSTEM_FLAG`; persistent
+    /// tables and views are both returned, distinguished by
+    /// [`plamenix_types::TableKind`].
+    async fn describe_schema(&self, session: SessionId) -> Result<Schema, DbError>;
 }

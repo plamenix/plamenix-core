@@ -97,3 +97,53 @@ pub struct ConnectionConfig {
     #[serde(default)]
     pub encryption_required: bool,
 }
+
+/// Catalogue describing the schema visible to a Firebird session.
+///
+/// Returned by `DbDriver::describe_schema`. Includes tables and views
+/// (filtered by `RDB$SYSTEM_FLAG = 0`); system relations are excluded.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Schema {
+    /// All non-system tables and views the connection can see, sorted
+    /// by name and each carrying their column list.
+    pub tables: Vec<TableInfo>,
+}
+
+/// One row from `RDB$RELATIONS` plus its columns.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableInfo {
+    /// Relation name as Firebird stores it (already trimmed of CHAR
+    /// padding).
+    pub name: String,
+    /// Whether this is a persistent table or a view.
+    pub kind: TableKind,
+    /// Column metadata, in declared position order.
+    pub columns: Vec<ColumnInfo>,
+}
+
+/// Persistent table vs view, derived from `RDB$RELATION_TYPE`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TableKind {
+    /// Persistent base table.
+    Table,
+    /// View.
+    View,
+}
+
+/// One row from `RDB$RELATION_FIELDS`/`RDB$FIELDS`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnInfo {
+    /// Column name as Firebird stores it.
+    pub name: String,
+    /// Ordinal position within the relation, starting at 0.
+    pub position: i32,
+    /// Human-readable SQL type string (e.g. `VARCHAR(50)`,
+    /// `TIMESTAMP WITH TIME ZONE`, `BLOB SUB_TYPE TEXT`).
+    pub sql_type: String,
+    /// `true` when the column allows `NULL`.
+    pub nullable: bool,
+}

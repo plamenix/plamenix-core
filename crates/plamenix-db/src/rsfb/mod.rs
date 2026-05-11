@@ -23,7 +23,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use plamenix_types::{ConnectionConfig, SessionId};
+use plamenix_types::{ColumnInfo, ConnectionConfig, Schema, SessionId, TableInfo, TableKind};
 use rsfbclient::{Execute, Queryable, Row as RsfbRow, SimpleConnection, SqlType};
 use tokio::sync::Mutex;
 
@@ -127,6 +127,15 @@ impl DbDriver for RsfbDriver {
         tokio::task::spawn_blocking(move || {
             let mut guard = shared.blocking_lock();
             run_crypt_state(&mut guard)
+        })
+        .await?
+    }
+
+    async fn describe_schema(&self, session: SessionId) -> Result<Schema, DbError> {
+        let shared = self.shared_conn(session).await?;
+        tokio::task::spawn_blocking(move || {
+            let mut guard = shared.blocking_lock();
+            run_describe_schema(&mut guard)
         })
         .await?
     }
@@ -259,6 +268,123 @@ fn run_ping(conn: &mut SimpleConnection) -> Result<String, DbError> {
         .into_iter()
         .next()
         .map_or_else(|| "unknown".into(), |(v,)| v))
+}
+
+fn run_describe_schema(conn: &mut SimpleConnection) -> Result<Schema, DbError> {
+    // The cross-join leaves columns NULL for views/tables with no
+    // declared fields (rare for tables, common for some virtual
+    // relations); we handle the empty-columns case below.
+    let rows: Vec<RsfbRow> = conn
+        .query(
+            "SELECT TRIM(r.RDB$RELATION_NAME), r.RDB$RELATION_TYPE, \
+             TRIM(rf.RDB$FIELD_NAME), rf.RDB$FIELD_POSITION, rf.RDB$NULL_FLAG, \
+             f.RDB$FIELD_TYPE, f.RDB$FIELD_SUB_TYPE, f.RDB$FIELD_LENGTH \
+             FROM RDB$RELATIONS r \
+             LEFT JOIN RDB$RELATION_FIELDS rf ON rf.RDB$RELATION_NAME = r.RDB$RELATION_NAME \
+             LEFT JOIN RDB$FIELDS f ON f.RDB$FIELD_NAME = rf.RDB$FIELD_SOURCE \
+             WHERE COALESCE(r.RDB$SYSTEM_FLAG, 0) = 0 \
+             ORDER BY r.RDB$RELATION_NAME, rf.RDB$FIELD_POSITION",
+            (),
+        )
+        .map_err(DbError::from)?;
+
+    let mut tables: Vec<TableInfo> = Vec::new();
+    for row in rows {
+        let rel_name = match row.cols.first().map(|c| &c.value) {
+            Some(SqlType::Text(name)) => name.clone(),
+            _ => continue,
+        };
+        let rel_type = match row.cols.get(1).map(|c| &c.value) {
+            Some(SqlType::Integer(value)) => Some(*value),
+            _ => None,
+        };
+        let kind = match rel_type {
+            Some(1) => TableKind::View,
+            _ => TableKind::Table,
+        };
+
+        let needs_new = tables.last().is_none_or(|t| t.name != rel_name);
+        if needs_new {
+            tables.push(TableInfo {
+                name: rel_name,
+                kind,
+                columns: Vec::new(),
+            });
+        }
+        let Some(current) = tables.last_mut() else {
+            continue;
+        };
+
+        let col_name = match row.cols.get(2).map(|c| &c.value) {
+            Some(SqlType::Text(name)) => Some(name.clone()),
+            _ => None,
+        };
+        let position = match row.cols.get(3).map(|c| &c.value) {
+            Some(SqlType::Integer(value)) => Some(i32::try_from(*value).unwrap_or(0)),
+            _ => None,
+        };
+        let null_flag = match row.cols.get(4).map(|c| &c.value) {
+            Some(SqlType::Integer(value)) => Some(*value),
+            _ => None,
+        };
+        let field_type = match row.cols.get(5).map(|c| &c.value) {
+            Some(SqlType::Integer(value)) => Some(*value),
+            _ => None,
+        };
+        let field_sub_type = match row.cols.get(6).map(|c| &c.value) {
+            Some(SqlType::Integer(value)) => *value,
+            _ => 0,
+        };
+        let field_length = match row.cols.get(7).map(|c| &c.value) {
+            Some(SqlType::Integer(value)) => *value,
+            _ => 0,
+        };
+
+        if let (Some(name), Some(pos), Some(ft)) = (col_name, position, field_type) {
+            let nullable = null_flag.unwrap_or(0) == 0;
+            let sql_type = field_type_name(ft, field_sub_type, field_length);
+            current.columns.push(ColumnInfo {
+                name,
+                position: pos,
+                sql_type,
+                nullable,
+            });
+        }
+    }
+
+    Ok(Schema { tables })
+}
+
+fn field_type_name(field_type: i64, sub_type: i64, length: i64) -> String {
+    match field_type {
+        7 => "SMALLINT".into(),
+        8 => match sub_type {
+            1 => "NUMERIC".into(),
+            2 => "DECIMAL".into(),
+            _ => "INTEGER".into(),
+        },
+        10 => "FLOAT".into(),
+        12 => "DATE".into(),
+        13 => "TIME".into(),
+        14 => format!("CHAR({length})"),
+        16 => match sub_type {
+            1 => "NUMERIC".into(),
+            2 => "DECIMAL".into(),
+            _ => "BIGINT".into(),
+        },
+        23 => "BOOLEAN".into(),
+        26 => "INT128".into(),
+        27 => "DOUBLE PRECISION".into(),
+        28 => "TIME WITH TIME ZONE".into(),
+        29 => "TIMESTAMP WITH TIME ZONE".into(),
+        35 => "TIMESTAMP".into(),
+        37 => format!("VARCHAR({length})"),
+        261 => match sub_type {
+            1 => "BLOB SUB_TYPE TEXT".into(),
+            _ => "BLOB".into(),
+        },
+        other => format!("UNKNOWN({other})"),
+    }
 }
 
 fn sqltype_to_value(value: &SqlType) -> ColumnValue {

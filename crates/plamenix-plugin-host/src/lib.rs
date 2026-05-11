@@ -12,12 +12,14 @@
 //!
 //! * **Phase A** — manifest parser, capability grammar, wasmtime
 //!   engine wrapper, bundle loader that stops at component compilation.
-//! * **Phase B (this revision)** — wit-bindgen plumbing for the host
-//!   import (`log`, `host-version`) and plugin export (`activate`).
-//!   Plugins instantiate inside a per-plugin store and their
-//!   `activate()` is called.
-//! * **Phase C** — sample `hello-plugin` example, broader integration
-//!   tests, subprocess fallback for `runtime.subprocess` plugins.
+//! * **Phase B** — wit-bindgen plumbing for the host import (`log`,
+//!   `host-version`) and plugin export (`activate`). Plugins
+//!   instantiate inside a per-plugin store and their `activate()` is
+//!   called.
+//! * **Phase C (this revision)** — `examples/hello-plugin/` ships a
+//!   real Rust plugin compiled to `wasm32-wasip2`; an integration test
+//!   loads it, activates it, and asserts the host received the plugin's
+//!   `log` event via an opt-in capture sink on [`HostState`].
 //!
 //! The crate is conservative on purpose: WASM Component Model is
 //! young, and Plamenix needs the M1 install path to be solid before
@@ -34,10 +36,10 @@ pub mod host_impl;
 pub mod loader;
 pub mod manifest;
 
-pub use activator::{ActivationOutcome, activate};
+pub use activator::{ActivationOutcome, activate, activate_with_state};
 pub use capability::{LogicalDir, OsKeyring, Permission, PermissionSet};
 pub use error::PluginError;
 pub use host::PluginHost;
-pub use host_impl::{HostState, register_host};
+pub use host_impl::{HostState, LogLevel, LogSink, RecordedLog, register_host};
 pub use loader::{StagedPlugin, load};
 pub use manifest::{EntryPoints, Manifest, PluginMetadata, RuntimeFlags};

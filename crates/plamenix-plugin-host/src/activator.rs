@@ -1,10 +1,15 @@
 //! Plugin activation pipeline.
 //!
-//! `activate` consumes a [`StagedPlugin`] (produced by
-//! [`crate::loader::load`]), instantiates it inside a fresh wasmtime
-//! [`Store`], links the host imports via [`crate::host_impl`], and
-//! calls the plugin's `activate` export. The returned
-//! [`ActivationOutcome`] mirrors the WIT `activation` variant.
+//! Two entry points:
+//!
+//! * [`activate`] — convenience wrapper that builds a default
+//!   [`HostState`] from the plugin id and host version.
+//! * [`activate_with_state`] — full control; callers supply a
+//!   pre-built [`HostState`] (useful for tests that attach a log sink
+//!   or for hosts that want to plug in shared services later).
+//!
+//! Both end by calling the plugin's `activate` export and mapping the
+//! WIT `activation` variant to [`ActivationOutcome`].
 
 use wasmtime::Store;
 use wasmtime::component::Linker;
@@ -36,7 +41,23 @@ impl From<wit_plugin::Activation> for ActivationOutcome {
     }
 }
 
-/// Instantiates `staged` and calls its `activate` export.
+/// Instantiates `staged` with a default host state and calls its
+/// `activate` export.
+///
+/// # Errors
+///
+/// See [`activate_with_state`].
+pub async fn activate(
+    host: &PluginHost,
+    host_version: &str,
+    staged: &StagedPlugin,
+) -> Result<ActivationOutcome, PluginError> {
+    let state = HostState::new(&staged.manifest.plugin.id, host_version);
+    activate_with_state(host, state, staged).await
+}
+
+/// Instantiates `staged` and calls its `activate` export using the
+/// supplied [`HostState`].
 ///
 /// Plugins without a wasm half (UI-only) skip activation entirely and
 /// return `Ok(ActivationOutcome::Ok)`.
@@ -46,9 +67,9 @@ impl From<wit_plugin::Activation> for ActivationOutcome {
 /// Returns [`PluginError::Runtime`] if the linker rejects a host
 /// import, the store fails to instantiate the component, or the
 /// `activate` call traps inside the plugin.
-pub async fn activate(
+pub async fn activate_with_state(
     host: &PluginHost,
-    host_version: &str,
+    state: HostState,
     staged: &StagedPlugin,
 ) -> Result<ActivationOutcome, PluginError> {
     let Some(component) = staged.component.as_ref() else {
@@ -58,7 +79,6 @@ pub async fn activate(
     let mut linker = Linker::<HostState>::new(host.engine());
     register_host(&mut linker)?;
 
-    let state = HostState::new(&staged.manifest.plugin.id, host_version);
     let mut store = Store::new(host.engine(), state);
 
     let bindings = PlamenixPlugin::instantiate_async(&mut store, component, &linker)

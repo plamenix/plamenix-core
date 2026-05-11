@@ -1,0 +1,22 @@
+[package]
+name = "hello-plugin"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "0.46", default-features = false, features = ["realloc", "macros"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "symbols"
+
+# Standalone — does not participate in the workspace, since it builds for
+# wasm32-wasip2 with a different lint baseline.
+[workspace]

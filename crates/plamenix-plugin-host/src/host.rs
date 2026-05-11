@@ -31,10 +31,12 @@ impl PluginHost {
         let mut config = Config::new();
         config.wasm_component_model(true);
         config.async_support(true);
+        config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Enable);
         // Plugins are user-supplied code; epoch interruption lets the
         // host preempt long-running plugin work. The deadline is set
-        // per-store when a plugin call begins.
-        config.epoch_interruption(true);
+        // per-store when a plugin call begins. Disabled in dev until a
+        // store-side deadline scheduler lands.
+        config.epoch_interruption(false);
 
         let engine = Engine::new(&config).map_err(|err| PluginError::Runtime(err.to_string()))?;
         Ok(Self {

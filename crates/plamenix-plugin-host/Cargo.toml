@@ -16,6 +16,7 @@ semver.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 wasmtime.workspace = true
+wasmtime-wasi.workspace = true
 async-trait.workspace = true
 
 [dev-dependencies]

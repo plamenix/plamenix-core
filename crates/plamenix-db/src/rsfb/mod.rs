@@ -16,6 +16,8 @@
 //! the blocking task acquires the mutex via `blocking_lock` so the
 //! same lock used by async callers serialises against the worker.
 
+pub mod resolver;
+
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -112,18 +114,24 @@ fn build_connection(
 
 #[cfg(feature = "native")]
 fn build_native(config: &ConnectionConfig) -> Result<SimpleConnection, DbError> {
-    let mut builder = rsfbclient::builder_native();
-    if let Some(path) = &config.fbclient_path {
-        builder.with_dyn_load(path);
-    } else {
-        builder.with_dyn_link();
-    }
+    let Some(path) = resolver::resolve_fbclient_path(config) else {
+        return Err(DbError::Connect(
+            "native mode requires a bundled fbclient: set ConnectionConfig.fbclient_path \
+             or the PLAMENIX_FBCLIENT_PATH environment variable"
+                .into(),
+        ));
+    };
+    let path_str = path.to_string_lossy().into_owned();
+    let mut builder = rsfbclient::builder_native()
+        .with_dyn_load(path_str)
+        .with_remote();
     builder
         .host(&config.host)
         .port(config.port)
         .db_name(&config.database)
         .user(&config.user)
-        .pass(&config.password)
+        .pass(&config.password);
+    builder
         .connect()
         .map(SimpleConnection::from)
         .map_err(|err| DbError::Connect(err.to_string()))

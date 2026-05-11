@@ -37,6 +37,7 @@ pub use driver::{ConnectMode, DbDriver};
 pub use error::DbError;
 pub use query::{Column, ColumnValue, QueryResult, Row};
 pub use rsfb::RsfbDriver;
+pub use rsfb::resolver::{FBCLIENT_PATH_ENV, resolve_fbclient_path};
 
 // Re-export for downstream crates that only depend on `plamenix-db`.
 pub use plamenix_types::{ConnectionConfig, SessionId};

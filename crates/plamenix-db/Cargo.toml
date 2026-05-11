@@ -16,8 +16,9 @@ default = ["pure-rust"]
 
 # Native fbclient backend. Plamenix's main mode in production: the
 # bundled `fbclient` library is loaded at runtime via `with_dyn_load`.
-# The `linking` feature also lets builds compile-time link when desired.
-native = ["rsfbclient/linking", "rsfbclient/dynamic_loading"]
+# Only `dynamic_loading` is enabled so the crate compiles in CI
+# without fbclient on the build host.
+native = ["rsfbclient/dynamic_loading"]
 
 # Pure-Rust wire-protocol backend kept as a fallback for environments
 # without an fbclient binary. Limited feature coverage; see

@@ -10,14 +10,14 @@
 //!
 //! This crate ships in three phases:
 //!
-//! * **Phase A (this revision)** — manifest parser, capability grammar,
-//!   wasmtime engine wrapper, bundle loader that stops at component
-//!   compilation. No plugin code runs.
-//! * **Phase B** — wit-bindgen plumbing for the host import (`log`,
-//!   `host-version`) and plugin export (`activate`). Plugins are
-//!   instantiated and their `activate()` is called.
-//! * **Phase C** — sample `hello-plugin` example, integration tests,
-//!   subprocess fallback for `runtime.subprocess` plugins.
+//! * **Phase A** — manifest parser, capability grammar, wasmtime
+//!   engine wrapper, bundle loader that stops at component compilation.
+//! * **Phase B (this revision)** — wit-bindgen plumbing for the host
+//!   import (`log`, `host-version`) and plugin export (`activate`).
+//!   Plugins instantiate inside a per-plugin store and their
+//!   `activate()` is called.
+//! * **Phase C** — sample `hello-plugin` example, broader integration
+//!   tests, subprocess fallback for `runtime.subprocess` plugins.
 //!
 //! The crate is conservative on purpose: WASM Component Model is
 //! young, and Plamenix needs the M1 install path to be solid before
@@ -25,14 +25,19 @@
 
 #![forbid(unsafe_code)]
 
+pub mod activator;
+pub mod bindings;
 pub mod capability;
 pub mod error;
 pub mod host;
+pub mod host_impl;
 pub mod loader;
 pub mod manifest;
 
+pub use activator::{ActivationOutcome, activate};
 pub use capability::{LogicalDir, OsKeyring, Permission, PermissionSet};
 pub use error::PluginError;
 pub use host::PluginHost;
+pub use host_impl::{HostState, register_host};
 pub use loader::{StagedPlugin, load};
 pub use manifest::{EntryPoints, Manifest, PluginMetadata, RuntimeFlags};

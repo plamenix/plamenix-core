@@ -1014,11 +1014,13 @@ dependencies = [
 name = "plamenix-plugin-host"
 version = "1.0.0-beta"
 dependencies = [
+ "async-trait",
  "plamenix-types",
  "semver",
  "serde",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "toml",
  "tracing",
  "wasmtime",

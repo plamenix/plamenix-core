@@ -13,7 +13,10 @@ covers concerns specific to this repository.
 - `crates/plamenix-plugin-host/` — WASM Component Model plugin runtime
   (manifest parsing, capability grammar, wasmtime engine wrapper,
   bundle loader). Phase A: load + validate; Phase B: activate; Phase C:
-  sample plugin + end-to-end test.
+  sample plugin + end-to-end test. Plugins that set
+  `runtime.requires_subprocess` in the manifest route through the
+  native-binary subprocess activator instead of the WASM pipeline; the
+  protocol is documented at the top of `src/subprocess.rs`.
 - `crates/plamenix-secrets/` — OS keyring wrapper (macOS Keychain,
   Windows Credential Manager, Linux Secret Service) behind the
   `SecretStore` trait. `KeyringStore` for production, `InMemoryStore`

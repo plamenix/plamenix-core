@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use crate::capability::{Permission, PermissionSet};
 use crate::error::PluginError;
 
+const RUNTIME_SUBPROCESS_CAPABILITY: Permission = Permission::RuntimeSubprocess;
+
 /// A parsed and validated plugin manifest.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Manifest {
@@ -60,6 +62,10 @@ pub struct EntryPoints {
     /// Path to the ESM module exporting React contributions. Optional;
     /// some plugins ship only a backend half.
     pub ui: Option<PathBuf>,
+    /// Path to a native executable for plugins that opt out of the
+    /// WASM sandbox via `runtime.requires_subprocess`. Required when
+    /// that flag is set, ignored otherwise.
+    pub subprocess: Option<PathBuf>,
 }
 
 /// `[runtime]` table — flags that change how the host loads the plugin.
@@ -129,16 +135,24 @@ struct RawPermissions {
 struct RawEntryPoints {
     wasm: Option<PathBuf>,
     ui: Option<PathBuf>,
+    subprocess: Option<PathBuf>,
 }
 
 impl TryFrom<RawManifest> for Manifest {
     type Error = PluginError;
 
     fn try_from(raw: RawManifest) -> Result<Self, Self::Error> {
-        if raw.entry_points.wasm.is_none() && raw.entry_points.ui.is_none() {
+        if raw.entry_points.wasm.is_none()
+            && raw.entry_points.ui.is_none()
+            && raw.entry_points.subprocess.is_none()
+        {
             return Err(PluginError::InvalidManifest(
-                "entry_points must define at least one of `wasm` or `ui`".into(),
+                "entry_points must define at least one of `wasm`, `ui`, or `subprocess`".into(),
             ));
+        }
+
+        if raw.runtime.requires_subprocess && raw.entry_points.subprocess.is_none() {
+            return Err(PluginError::MissingSubprocessEntry);
         }
 
         let plugin = PluginMetadata {
@@ -174,12 +188,19 @@ impl TryFrom<RawManifest> for Manifest {
             .map(|raw| Permission::parse(&raw))
             .collect::<Result<Vec<_>, _>>()?;
 
+        let permissions = PermissionSet { required, optional };
+
+        if raw.runtime.requires_subprocess && !permissions.grants(&RUNTIME_SUBPROCESS_CAPABILITY) {
+            return Err(PluginError::MissingSubprocessCapability);
+        }
+
         Ok(Self {
             plugin,
-            permissions: PermissionSet { required, optional },
+            permissions,
             entry_points: EntryPoints {
                 wasm: raw.entry_points.wasm,
                 ui: raw.entry_points.ui,
+                subprocess: raw.entry_points.subprocess,
             },
             runtime: raw.runtime,
         })

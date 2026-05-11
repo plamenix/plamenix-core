@@ -35,6 +35,7 @@ pub mod host;
 pub mod host_impl;
 pub mod loader;
 pub mod manifest;
+pub mod subprocess;
 
 pub use activator::{ActivationOutcome, activate, activate_with_state};
 pub use capability::{LogicalDir, OsKeyring, Permission, PermissionSet};
@@ -43,3 +44,4 @@ pub use host::PluginHost;
 pub use host_impl::{HostState, LogLevel, LogSink, RecordedLog, register_host};
 pub use loader::{StagedPlugin, load};
 pub use manifest::{EntryPoints, Manifest, PluginMetadata, RuntimeFlags};
+pub use subprocess::activate_subprocess;

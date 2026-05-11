@@ -7,6 +7,8 @@
 //! `InvalidCapability` from [`Permission::parse`] rather than silently
 //! granting access.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::PluginError;
@@ -54,7 +56,7 @@ pub enum Permission {
 /// unavailable, calls into these resources fail with
 /// `PermissionDenied`.
 #[allow(missing_docs)]
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum LogicalDir {
     Downloads,
@@ -78,11 +80,21 @@ impl LogicalDir {
             )),
         }
     }
+
+    const fn as_token(self) -> &'static str {
+        match self {
+            Self::Downloads => "downloads",
+            Self::Documents => "documents",
+            Self::Temp => "temp",
+            Self::PluginData => "plugin-data",
+            Self::PluginConfig => "plugin-config",
+        }
+    }
 }
 
 /// Platform-specific keyring backends.
 #[allow(missing_docs)]
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum OsKeyring {
     Windows,
@@ -100,6 +112,14 @@ impl OsKeyring {
                 other.to_owned(),
                 "unknown keyring backend",
             )),
+        }
+    }
+
+    const fn as_token(self) -> &'static str {
+        match self {
+            Self::Windows => "windows",
+            Self::Macos => "macos",
+            Self::LinuxKeyring => "linux-keyring",
         }
     }
 }
@@ -146,6 +166,34 @@ impl Permission {
                 raw.to_owned(),
                 "no matching capability rule",
             )),
+        }
+    }
+}
+
+impl fmt::Display for Permission {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DbReadAny => f.write_str("db.read.any"),
+            Self::DbReadTable(name) => write!(f, "db.read.table.{name}"),
+            Self::DbWriteAny => f.write_str("db.write.any"),
+            Self::DbWriteTable(name) => write!(f, "db.write.table.{name}"),
+            Self::DbDdlAny => f.write_str("db.ddl.any"),
+            Self::DbDdlTable(name) => write!(f, "db.ddl.table.{name}"),
+            Self::DbSchemaList => f.write_str("db.schema.list"),
+            Self::DbSchemaDescribe => f.write_str("db.schema.describe"),
+            Self::ExportFormat => f.write_str("export.format"),
+            Self::ImportSource => f.write_str("import.source"),
+            Self::NetHttps => f.write_str("net.https"),
+            Self::NetHttpsHost(host) => write!(f, "net.https.{host}"),
+            Self::NetHttp => f.write_str("net.http"),
+            Self::FsReadDir(dir) => write!(f, "fs.read.dir.{}", (*dir).as_token()),
+            Self::FsWriteDir(dir) => write!(f, "fs.write.dir.{}", (*dir).as_token()),
+            Self::AuthOsKeyring(backend) => write!(f, "auth.os.{}", (*backend).as_token()),
+            Self::ClipboardRead => f.write_str("clipboard.read"),
+            Self::ClipboardWrite => f.write_str("clipboard.write"),
+            Self::OsNotify => f.write_str("os.notify"),
+            Self::OsOpenUrl => f.write_str("os.open-url"),
+            Self::RuntimeSubprocess => f.write_str("runtime.subprocess"),
         }
     }
 }

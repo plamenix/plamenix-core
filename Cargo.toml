@@ -21,8 +21,12 @@ async-trait = "0.1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros"] }
 rsfbclient = { version = "0.26", default-features = false }
 tracing = "0.1"
+toml = "0.9"
+semver = "1"
+wasmtime = { version = "27", default-features = false, features = ["runtime", "cranelift", "component-model", "async"] }
 plamenix-types = { path = "crates/plamenix-types" }
 plamenix-db = { path = "crates/plamenix-db" }
+plamenix-plugin-host = { path = "crates/plamenix-plugin-host" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -8,6 +8,12 @@ covers concerns specific to this repository.
 ## What lives here
 
 - `crates/plamenix-types/` — value types shared by every other crate.
+- `crates/plamenix-db/` — `DbDriver` trait + rsfbclient-backed
+  implementation (the first of the three swap-point traits).
+- `crates/plamenix-plugin-host/` — WASM Component Model plugin runtime
+  (manifest parsing, capability grammar, wasmtime engine wrapper,
+  bundle loader). Phase A: load + validate; Phase B: activate; Phase C:
+  sample plugin + end-to-end test.
 - More crates accrete here as concrete use cases arrive. Crates are
   added in the PR that first needs them, not pre-scaffolded.
 

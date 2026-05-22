@@ -33,8 +33,28 @@ pub enum DbError {
 
 impl From<rsfbclient::FbError> for DbError {
     fn from(err: rsfbclient::FbError) -> Self {
-        Self::Query(err.to_string())
+        Self::Query(rewrite_fb_error(&err.to_string()))
     }
+}
+
+/// Rewrites a few rsfbclient error strings that surface as opaque
+/// jargon into actionable Plamenix-flavoured diagnostics. Callers can
+/// still read the original wording — it's appended in parentheses for
+/// log diving.
+fn rewrite_fb_error(raw: &str) -> String {
+    // Defensive: the vendored rsfbclient-native (see
+    // `plamenix-core/vendor/rsfbclient-native`) handles SQL_ARRAY (540)
+    // and decodes it via `isc_array_get_slice`. The error below should
+    // never fire in the patched build — kept as a fallback in case a
+    // future rsfbclient upgrade reintroduces the rejection.
+    if raw.contains("Unsupported column type (540") {
+        return format!(
+            "This query selects a Firebird ARRAY column. The driver did \
+             not decode it — the vendored rsfbclient patch may be \
+             missing or the element type is unsupported. ({raw})",
+        );
+    }
+    raw.to_string()
 }
 
 impl From<tokio::task::JoinError> for DbError {

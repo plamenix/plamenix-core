@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plamenix.dev/schemas/plugin-manifest-1.0.0.json",
+  "title": "Plamenix plugin manifest",
+  "description": "Schema for `manifest.toml` shipped inside a Plamenix plugin bundle. Mirrors the Rust types in `plamenix_plugin_host::manifest::Manifest`. See `plamenix/docs/plugin-manifest.md` for the prose spec.",
+  "type": "object",
+  "required": ["plugin", "entry_points"],
+  "additionalProperties": false,
+  "properties": {
+    "plugin": { "$ref": "#/$defs/plugin" },
+    "permissions": { "$ref": "#/$defs/permissions" },
+    "entry_points": { "$ref": "#/$defs/entry_points" },
+    "runtime": { "$ref": "#/$defs/runtime" },
+    "contributions": { "$ref": "#/$defs/contributions" }
+  },
+  "$defs": {
+    "plugin": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "version",
+        "plamenix_min_version",
+        "plugin_api"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Reverse-DNS identifier (e.g. `dev.plamenix.hello`). Must be unique across the ecosystem.",
+          "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable plugin name shown in the plugin manager UI.",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "description": "Plugin SemVer (e.g. `1.0.0`, `1.0.0-beta.1`).",
+          "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
+        },
+        "plamenix_min_version": {
+          "type": "string",
+          "description": "SemVer requirement string for the host (e.g. `>=1.0.0-beta`, `^1.2`, `*`). Pre-release host versions require an explicit pre-release lower bound to match.",
+          "minLength": 1
+        },
+        "plugin_api": {
+          "type": "string",
+          "description": "WIT package version the plugin targets. Currently always `1.0` until the WIT contract bumps.",
+          "pattern": "^\\d+\\.\\d+$"
+        },
+        "author": {
+          "type": "string",
+          "description": "Optional author line. Convention: `Name <email>`."
+        },
+        "license": {
+          "type": "string",
+          "description": "Optional SPDX license expression."
+        },
+        "homepage": {
+          "type": "string",
+          "description": "Optional homepage URL.",
+          "format": "uri"
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional one-line description shown in the plugin manager UI."
+        }
+      }
+    },
+
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "type": "array",
+          "description": "Capabilities the plugin cannot operate without. The host refuses to honour calls that need these until the user grants them.",
+          "items": { "$ref": "#/$defs/permission" },
+          "uniqueItems": true,
+          "default": []
+        },
+        "optional": {
+          "type": "array",
+          "description": "Capabilities the plugin would like but can run without. Surfaced as an opt-in prompt.",
+          "items": { "$ref": "#/$defs/permission" },
+          "uniqueItems": true,
+          "default": []
+        }
+      }
+    },
+
+    "permission": {
+      "type": "string",
+      "description": "Dotted capability string. See `plamenix/docs/capability-model.md` for the grammar. Wildcards are deliberately not supported.",
+      "anyOf": [
+        {
+          "enum": [
+            "db.read.any",
+            "db.write.any",
+            "db.ddl.any",
+            "db.schema.list",
+            "db.schema.describe",
+            "export.format",
+            "import.source",
+            "net.https",
+            "net.http",
+            "clipboard.read",
+            "clipboard.write",
+            "os.notify",
+            "os.open-url",
+            "runtime.subprocess"
+          ]
+        },
+        {
+          "description": "Scoped DB read against a specific table.",
+          "pattern": "^db\\.read\\.table\\.[A-Za-z_][A-Za-z0-9_$]*$"
+        },
+        {
+          "description": "Scoped DB write against a specific table.",
+          "pattern": "^db\\.write\\.table\\.[A-Za-z_][A-Za-z0-9_$]*$"
+        },
+        {
+          "description": "Scoped DDL against a specific table.",
+          "pattern": "^db\\.ddl\\.table\\.[A-Za-z_][A-Za-z0-9_$]*$"
+        },
+        {
+          "description": "HTTPS scoped to a particular host.",
+          "pattern": "^net\\.https\\.[A-Za-z0-9.-]+$"
+        },
+        {
+          "description": "Filesystem read in a whitelisted logical directory.",
+          "pattern": "^fs\\.read\\.dir\\.(downloads|documents|temp|plugin-data|plugin-config)$"
+        },
+        {
+          "description": "Filesystem write in a whitelisted logical directory.",
+          "pattern": "^fs\\.write\\.dir\\.(downloads|documents|temp|plugin-data|plugin-config)$"
+        },
+        {
+          "description": "Per-platform OS keyring access.",
+          "pattern": "^auth\\.os\\.(windows|macos|linux-keyring)$"
+        }
+      ]
+    },
+
+    "entry_points": {
+      "type": "object",
+      "description": "Bundle-relative paths to plugin halves. At least one of `wasm`, `ui`, or `subprocess` must be present. When `runtime.requires_subprocess` is true, `subprocess` is required.",
+      "additionalProperties": false,
+      "anyOf": [
+        { "required": ["wasm"] },
+        { "required": ["ui"] },
+        { "required": ["subprocess"] }
+      ],
+      "properties": {
+        "wasm": {
+          "type": "string",
+          "description": "Path to the WASM Component Model component file.",
+          "pattern": "\\.wasm$"
+        },
+        "ui": {
+          "type": "string",
+          "description": "Path to the ESM module exporting React contributions.",
+          "pattern": "\\.(m?js|mjs)$"
+        },
+        "subprocess": {
+          "type": "string",
+          "description": "Path to the native executable for subprocess-mode plugins."
+        }
+      }
+    },
+
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requires_subprocess": {
+          "type": "boolean",
+          "description": "When true, the plugin runs outside the WASM sandbox via the subprocess activator. Requires `runtime.subprocess` in `permissions.required` and a `subprocess` entry point.",
+          "default": false
+        }
+      }
+    },
+
+    "contributions": {
+      "type": "object",
+      "description": "Declarative UI contributions surfaced without needing to run the plugin. The plugin's runtime half may augment them with state.",
+      "additionalProperties": false,
+      "properties": {
+        "sidebar_panels": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/sidebar_panel" },
+          "default": []
+        }
+      }
+    },
+
+    "sidebar_panel": {
+      "type": "object",
+      "required": ["id", "label"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable identifier used by the host to route panel clicks to the plugin.",
+          "pattern": "^[a-z][a-z0-9_-]*$"
+        },
+        "label": {
+          "type": "string",
+          "description": "Human-readable label shown in the sidebar.",
+          "minLength": 1
+        },
+        "icon": {
+          "type": "string",
+          "description": "Optional Lucide-react icon name. Unknown names fall back to a default in the host.",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

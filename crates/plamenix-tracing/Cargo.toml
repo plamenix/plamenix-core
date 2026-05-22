@@ -1,0 +1,36 @@
+[package]
+name = "plamenix-tracing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Tracing-subscriber initialisation for Plamenix binaries with optional OTLP exporter."
+publish = false
+
+[features]
+default = []
+
+# Enables the OpenTelemetry OTLP exporter (gRPC/tonic transport).
+# Off by default — adds ~30 transitive crates. When the feature is
+# enabled, the exporter still only attaches at runtime if the
+# `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable is set.
+otlp = [
+    "dep:tracing-opentelemetry",
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+]
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+tracing-opentelemetry = { workspace = true, optional = true }
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+
+[lints]
+workspace = true

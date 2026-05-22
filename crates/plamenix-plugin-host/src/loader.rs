@@ -62,6 +62,11 @@ impl std::fmt::Debug for StagedPlugin {
 /// host version is below the plugin's required range, or
 /// [`PluginError::WasmMissing`] / `Runtime` if the wasm file is missing
 /// or fails to compile.
+#[tracing::instrument(
+    name = "plugin.load",
+    skip(host, host_version, bundle_dir),
+    fields(bundle = %bundle_dir.as_ref().display()),
+)]
 pub fn load(
     host: &PluginHost,
     host_version: &Version,

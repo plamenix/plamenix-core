@@ -1,0 +1,25 @@
+[package]
+name = "plamenix-ts-gen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Emits TypeScript type definitions for every Plamenix wire type."
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+plamenix-types.workspace = true
+plamenix-db.workspace = true
+plamenix-profiles.workspace = true
+specta = { workspace = true }
+specta-serde = { workspace = true }
+specta-typescript = { workspace = true }
+specta-util = { workspace = true }
+
+[[bin]]
+name = "plamenix-ts-gen"
+path = "src/main.rs"

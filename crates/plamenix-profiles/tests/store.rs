@@ -127,6 +127,7 @@ fn resolve_propagates_overrides() {
         pure_rust: Some(true),
         encryption_required: Some(true),
         fbclient_path: Some("/opt/firebird/lib/libfbclient.dylib".into()),
+        charset: None,
     };
 
     let config = resolve_connection_config(

@@ -43,5 +43,7 @@ pub use error::PluginError;
 pub use host::PluginHost;
 pub use host_impl::{HostState, LogLevel, LogSink, RecordedLog, register_host};
 pub use loader::{StagedPlugin, load};
-pub use manifest::{EntryPoints, Manifest, PluginMetadata, RuntimeFlags};
+pub use manifest::{
+    Contributions, EntryPoints, Manifest, PluginMetadata, RuntimeFlags, SidebarPanel,
+};
 pub use subprocess::activate_subprocess;

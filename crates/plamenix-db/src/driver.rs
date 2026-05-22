@@ -6,7 +6,7 @@
 //! caller actually needs it.
 
 use async_trait::async_trait;
-use plamenix_types::{ConnectionConfig, Schema, SessionId};
+use plamenix_types::{ConnectionConfig, DatabaseStats, Schema, SessionId};
 
 use crate::crypt::CryptState;
 use crate::error::DbError;
@@ -72,4 +72,18 @@ pub trait DbDriver: Send + Sync {
     /// tables and views are both returned, distinguished by
     /// [`plamenix_types::TableKind`].
     async fn describe_schema(&self, session: SessionId) -> Result<Schema, DbError>;
+
+    /// Returns a snapshot of `MON$DATABASE`, `MON$ATTACHMENTS`, and
+    /// `MON$STATEMENTS` for the dashboard. Cheap to call repeatedly
+    /// (the UI polls on demand), but it does hit the engine — the
+    /// caller is responsible for cadence.
+    async fn database_stats(&self, session: SessionId) -> Result<DatabaseStats, DbError>;
+
+    /// Returns the cached BLOB body for `(session, blob_id)`.
+    ///
+    /// BLOB bodies are populated during `execute` and held until the
+    /// next execute on the same session (or until the session closes).
+    /// Returns an error when the cache no longer contains the id —
+    /// typically because the user has re-run the query.
+    async fn fetch_blob(&self, session: SessionId, blob_id: String) -> Result<Vec<u8>, DbError>;
 }

@@ -21,20 +21,34 @@ async-trait = "0.1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", "process", "time"] }
 rsfbclient = { version = "0.26", default-features = false }
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-opentelemetry = { version = "0.32", default-features = false }
+opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
+opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace", "rt-tokio"] }
+opentelemetry-otlp = { version = "0.31", default-features = false, features = ["trace", "grpc-tonic"] }
 toml = "0.9"
 semver = "1"
 wasmtime = { version = "27", default-features = false, features = ["runtime", "cranelift", "component-model", "async"] }
 wasmtime-wasi = { version = "27" }
 keyring = { version = "3", default-features = false }
+specta = { version = "2.0.0-rc.25", features = ["serde_json", "uuid", "derive"] }
+specta-serde = "0.0.12"
+specta-typescript = "0.0.12"
+specta-util = "0.0.12"
 plamenix-types = { path = "crates/plamenix-types" }
 plamenix-db = { path = "crates/plamenix-db" }
 plamenix-plugin-host = { path = "crates/plamenix-plugin-host" }
 plamenix-plugin-sdk = { path = "crates/plamenix-plugin-sdk" }
 plamenix-secrets = { path = "crates/plamenix-secrets" }
 plamenix-profiles = { path = "crates/plamenix-profiles" }
+plamenix-tracing = { path = "crates/plamenix-tracing" }
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny` so individual crates can narrow to `allow` on a specific
+# module (e.g. `plamenix-db::crypt_callback` for the Firebird FFI
+# shim). Crates with no `unsafe` needs add `#![forbid(unsafe_code)]`
+# at their `lib.rs` root for an extra belt-and-braces guarantee.
+unsafe_code = "deny"
 missing_docs = "warn"
 rust_2018_idioms = { level = "warn", priority = -1 }
 
@@ -57,3 +71,9 @@ opt-level = 0
 
 [profile.test]
 opt-level = 1
+
+[patch.crates-io]
+# Vendored copy that adds SQL_ARRAY (540) decoding via
+# `isc_array_lookup_bounds` + `isc_array_get_slice` on top of the
+# upstream 0.26 release. See `vendor/rsfbclient-native/src/row.rs`.
+rsfbclient-native = { path = "vendor/rsfbclient-native" }

@@ -24,6 +24,6 @@ pub mod resolve;
 pub mod store;
 
 pub use error::ProfileError;
-pub use profile::{Profile, ProfileId};
+pub use profile::{Profile, ProfileId, now_epoch_ms};
 pub use resolve::{ConnectOverrides, RuntimeSecrets, resolve_connection_config, resolve_pure_rust};
 pub use store::{JsonFileStore, ProfileStore};

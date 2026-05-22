@@ -9,12 +9,13 @@
 //! `plamenix-secrets` at connect time.
 
 use serde::{Deserialize, Serialize};
+use specta::Type;
 use uuid::Uuid;
 
 /// Stable identifier for a profile across renames.
 ///
 /// Allocated with `ProfileId::new()` on first save and immutable after.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, Type)]
 pub struct ProfileId(pub Uuid);
 
 impl ProfileId {
@@ -32,7 +33,7 @@ impl Default for ProfileId {
 }
 
 /// A saved connection profile.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
     /// Stable identifier.
@@ -59,10 +60,50 @@ pub struct Profile {
     /// When true, the host uses rsfbclient's pure-Rust backend instead
     /// of the bundled native fbclient.
     pub pure_rust: bool,
+    /// Optional accent-palette id (`blue`, `amber`, `rose`, …) the UI
+    /// uses to tint this profile's tabs and status dot. Lets users
+    /// visually distinguish dev/staging/prod connections. `None` means
+    /// "no tint, use the default theme accent".
+    #[serde(default)]
+    pub color: Option<String>,
+    /// Epoch milliseconds (UTC) when this profile was first saved.
+    /// Stable across edits; the store preserves the original value
+    /// when overwriting an existing entry. Older profile files that
+    /// pre-date this field deserialise with `0`.
+    #[serde(default)]
+    pub created_at: i64,
+    /// Epoch milliseconds (UTC) of the most recent successful connect
+    /// using this profile. `None` until the user has connected at
+    /// least once. Surfaces in the profile picker as a relative
+    /// "Last used Xm ago" hint.
+    #[serde(default)]
+    pub last_used_at: Option<i64>,
+    /// Epoch milliseconds (UTC) of the most recent explicit
+    /// disconnect against this profile. Stamped only when the user
+    /// (or the app on their behalf) calls Disconnect — not on tab
+    /// close or app shutdown. Pairs with `last_used_at` so the
+    /// profile picker can render "Used X · Disconnected Y" hints.
+    #[serde(default)]
+    pub last_disconnected_at: Option<i64>,
+    /// Optional absolute path to the Firebird native client library
+    /// (`libfbclient.dylib` / `.so` / `fbclient.dll`). When set,
+    /// `plamenix-db` hands it to `rsfbclient::with_dyn_load` so the
+    /// session attaches via this specific build (useful when multiple
+    /// Firebird versions are installed side-by-side). `None` falls
+    /// back to the usual `PLAMENIX_FBCLIENT_PATH` env chain. Ignored
+    /// entirely when `pure_rust` is `true`.
+    #[serde(default)]
+    pub fbclient_path: Option<String>,
+    /// Wire charset for the session. `None` falls back to `UTF8`.
+    /// Accepted values match `rsfbclient_core::Charset::from_str` —
+    /// see `plamenix_types::ConnectionConfig::charset` for the list.
+    #[serde(default)]
+    pub charset: Option<String>,
 }
 
 impl Profile {
-    /// Builds a fresh profile with a new id and the supplied fields.
+    /// Builds a fresh profile with a new id, the supplied fields, and
+    /// `created_at` stamped with the current epoch milliseconds.
     #[must_use]
     pub fn new(
         name: impl Into<String>,
@@ -82,6 +123,24 @@ impl Profile {
             encryption_key_keyring_ref: None,
             encryption_required: false,
             pure_rust: false,
+            color: None,
+            created_at: now_epoch_ms(),
+            last_used_at: None,
+            last_disconnected_at: None,
+            fbclient_path: None,
+            charset: None,
         }
     }
+}
+
+/// Wall-clock helper. Used by `Profile::new` and by the host's
+/// "profile touched on connect" path; living here keeps the time
+/// source in one place.
+#[must_use]
+pub fn now_epoch_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }

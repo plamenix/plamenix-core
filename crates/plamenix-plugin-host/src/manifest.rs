@@ -28,6 +28,33 @@ pub struct Manifest {
     pub entry_points: EntryPoints,
     /// Runtime-mode flags (subprocess, sandbox opt-outs).
     pub runtime: RuntimeFlags,
+    /// Declarative UI contributions advertised by the plugin. Optional —
+    /// plugins that only do background work leave this empty.
+    #[serde(default)]
+    pub contributions: Contributions,
+}
+
+/// Declarative contribution points. Plugins ship these as static
+/// manifest entries so the host can render them without running the
+/// plugin first; the plugin's runtime half augments them with state.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Contributions {
+    /// Side-panel contributions surfaced by the host's sidebar shell.
+    #[serde(default)]
+    pub sidebar_panels: Vec<SidebarPanel>,
+}
+
+/// One sidebar-panel contribution.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SidebarPanel {
+    /// Stable identifier; used by the host to route clicks to the
+    /// plugin's UI half (when it ships one).
+    pub id: String,
+    /// Human-readable label shown in the sidebar.
+    pub label: String,
+    /// Optional Lucide-react icon name. The host resolves the string
+    /// to a concrete component; unknown icons fall back to a default.
+    pub icon: Option<String>,
 }
 
 /// `[plugin]` table — identity and host-compatibility metadata.
@@ -108,6 +135,8 @@ struct RawManifest {
     entry_points: RawEntryPoints,
     #[serde(default)]
     runtime: RuntimeFlags,
+    #[serde(default)]
+    contributions: Contributions,
 }
 
 #[derive(Debug, Deserialize)]
@@ -203,6 +232,7 @@ impl TryFrom<RawManifest> for Manifest {
                 subprocess: raw.entry_points.subprocess,
             },
             runtime: raw.runtime,
+            contributions: raw.contributions,
         })
     }
 }

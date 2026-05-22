@@ -18,7 +18,7 @@ default = ["pure-rust"]
 # bundled `fbclient` library is loaded at runtime via `with_dyn_load`.
 # Only `dynamic_loading` is enabled so the crate compiles in CI
 # without fbclient on the build host.
-native = ["rsfbclient/dynamic_loading"]
+native = ["rsfbclient/dynamic_loading", "dep:rsfbclient-native"]
 
 # Pure-Rust wire-protocol backend kept as a fallback for environments
 # without an fbclient binary. Limited feature coverage; see
@@ -33,6 +33,14 @@ tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+specta = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+# Direct pin on the vendored rsfbclient-native (see workspace
+# `[patch.crates-io]`). Lets `crypt_callback` call the patched-in
+# `register_crypt_callback` helper instead of reimplementing the
+# libloading dance in this crate.
+rsfbclient-native = { version = "0.26", default-features = false, features = ["dynamic_loading"], optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }

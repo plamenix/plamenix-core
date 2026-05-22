@@ -47,6 +47,31 @@ pub trait ProfileStore: Send + Sync {
     ///
     /// Returns the backing store's failure mode if the write fails.
     fn delete(&self, id: ProfileId) -> Result<(), ProfileError>;
+
+    /// Stamps `last_used_at` on the profile with the supplied id and
+    /// persists the change. Callers invoke this after a successful
+    /// `DbDriver::connect` against the profile. No-op when the id is
+    /// unknown — failure to touch is never worth propagating up the
+    /// connect path.
+    ///
+    /// # Errors
+    ///
+    /// Returns the backing store's failure mode if the write fails.
+    fn touch(&self, id: ProfileId, at_epoch_ms: i64) -> Result<(), ProfileError>;
+
+    /// Stamps `last_disconnected_at` on the profile with the supplied
+    /// id and persists the change. Callers invoke this after an
+    /// explicit `DbDriver::close` against a session that was opened
+    /// from this profile. No-op when the id is unknown.
+    ///
+    /// # Errors
+    ///
+    /// Returns the backing store's failure mode if the write fails.
+    fn touch_disconnected(
+        &self,
+        id: ProfileId,
+        at_epoch_ms: i64,
+    ) -> Result<(), ProfileError>;
 }
 
 /// JSON-on-disk implementation of [`ProfileStore`].
@@ -150,6 +175,28 @@ impl ProfileStore for JsonFileStore {
             self.write_all(&profiles)?;
         }
         Ok(())
+    }
+
+    fn touch(&self, id: ProfileId, at_epoch_ms: i64) -> Result<(), ProfileError> {
+        let mut profiles = self.read_all()?;
+        let Some(target) = profiles.iter_mut().find(|p| p.id == id) else {
+            return Ok(());
+        };
+        target.last_used_at = Some(at_epoch_ms);
+        self.write_all(&profiles)
+    }
+
+    fn touch_disconnected(
+        &self,
+        id: ProfileId,
+        at_epoch_ms: i64,
+    ) -> Result<(), ProfileError> {
+        let mut profiles = self.read_all()?;
+        let Some(target) = profiles.iter_mut().find(|p| p.id == id) else {
+            return Ok(());
+        };
+        target.last_disconnected_at = Some(at_epoch_ms);
+        self.write_all(&profiles)
     }
 }
 

@@ -13,3 +13,4 @@ workspace = true
 [dependencies]
 serde = { workspace = true }
 uuid = { workspace = true }
+specta = { workspace = true }

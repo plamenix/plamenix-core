@@ -41,6 +41,9 @@ pub struct ConnectOverrides {
     /// Explicit `fbclient_path` override, otherwise resolved via the
     /// usual `PLAMENIX_FBCLIENT_PATH` chain in `plamenix-db`.
     pub fbclient_path: Option<String>,
+    /// Explicit `charset` override, otherwise inherits the profile's
+    /// stored charset (falling back to `UTF8` when neither is set).
+    pub charset: Option<String>,
 }
 
 /// Returns the effective `pure_rust` flag after applying overrides.
@@ -66,20 +69,26 @@ pub fn resolve_connection_config(
     runtime: &RuntimeSecrets,
     overrides: &ConnectOverrides,
 ) -> Result<ConnectionConfig, ProfileError> {
-    let password = match (&profile.password_keyring_ref, &runtime.password) {
-        (Some(account), _) => {
+    // Runtime values take priority over the keyring-stored ones. The
+    // connect dialog's password field says "Leave empty to use the
+    // password stored in your keyring" — empty / absent runtime →
+    // fall back to keyring, anything else → user explicitly overrode.
+    let runtime_password = runtime.password.as_deref().filter(|s| !s.is_empty());
+    let password = match (runtime_password, &profile.password_keyring_ref) {
+        (Some(plain), _) => plain.to_owned(),
+        (None, Some(account)) => {
             secrets.retrieve(&SecretRef::new(service, account.clone()))?
         }
-        (None, Some(plain)) => plain.clone(),
         (None, None) => String::new(),
     };
 
-    let encryption_key = match (&profile.encryption_key_keyring_ref, &runtime.encryption_key) {
-        (Some(account), _) => Some(
+    let runtime_encryption_key = runtime.encryption_key.as_deref().filter(|s| !s.is_empty());
+    let encryption_key = match (runtime_encryption_key, &profile.encryption_key_keyring_ref) {
+        (Some(plain), _) => Some(plain.to_owned()),
+        (None, Some(account)) => Some(
             secrets.retrieve(&SecretRef::new(service, account.clone()))?,
         ),
-        (None, Some(plain)) if !plain.is_empty() => Some(plain.clone()),
-        _ => None,
+        (None, None) => None,
     };
 
     Ok(ConnectionConfig {
@@ -89,7 +98,14 @@ pub fn resolve_connection_config(
         user: profile.user.clone(),
         password,
         encryption_key,
-        fbclient_path: overrides.fbclient_path.clone(),
+        fbclient_path: overrides
+            .fbclient_path
+            .clone()
+            .or_else(|| profile.fbclient_path.clone()),
+        charset: overrides
+            .charset
+            .clone()
+            .or_else(|| profile.charset.clone()),
         encryption_required: overrides.encryption_required.unwrap_or(profile.encryption_required),
     })
 }

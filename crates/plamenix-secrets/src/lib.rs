@@ -24,4 +24,4 @@ pub mod error;
 pub mod store;
 
 pub use error::SecretError;
-pub use store::{InMemoryStore, KeyringStore, SecretRef, SecretStore};
+pub use store::{InMemoryStore, JsonSecretStore, KeyringStore, SecretRef, SecretStore};

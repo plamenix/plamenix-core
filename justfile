@@ -40,6 +40,11 @@ doc-build:
 # Run the full local CI pipeline (matches what CI runs).
 all: fmt-check lint test doc-build
 
+# Regenerate the TypeScript wire-type bindings consumed by plamenix-ui.
+# Writes to ../plamenix-ui/src/db/generated.ts (override with an arg).
+ts-gen *path:
+    cargo run -p plamenix-ts-gen -- {{path}}
+
 # Remove build artifacts.
 clean:
     cargo clean

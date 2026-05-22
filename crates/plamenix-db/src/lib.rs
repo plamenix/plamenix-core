@@ -26,18 +26,27 @@
 //!
 //! See `../../../docs/firebird-driver.md` for the full driver design.
 
-#![forbid(unsafe_code)]
+// `crypt_callback` (native feature) needs `unsafe` for the Firebird
+// C-callback FFI shim. Keep the rest of the crate `deny(unsafe_code)`
+// and narrow the allow to that one module.
+#![deny(unsafe_code)]
 
 pub mod crypt;
+#[cfg(feature = "native")]
+pub mod crypt_callback;
 pub mod driver;
 pub mod error;
+pub mod export;
 pub mod query;
 pub mod rsfb;
 
 pub use crypt::CryptState;
 pub use driver::{ConnectMode, DbDriver};
 pub use error::DbError;
-pub use query::{Column, ColumnValue, QueryResult, Row};
+pub use query::{
+    BlobRef, Column, ColumnValue, QueryResult, Row, StatementOutcome, inject_row_limit,
+    is_select_like, split_statements,
+};
 pub use rsfb::RsfbDriver;
 pub use rsfb::resolver::{FBCLIENT_PATH_ENV, resolve_fbclient_path};
 

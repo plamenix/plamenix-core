@@ -52,6 +52,15 @@ impl From<wit_plugin::Activation> for ActivationOutcome {
 ///
 /// See [`activate_with_state`] and
 /// [`crate::subprocess::activate_subprocess`].
+#[tracing::instrument(
+    name = "plugin.activate",
+    skip(host, staged),
+    fields(
+        plugin_id = %staged.manifest.plugin.id,
+        version = %staged.manifest.plugin.version,
+        subprocess = staged.manifest.runtime.requires_subprocess,
+    ),
+)]
 pub async fn activate(
     host: &PluginHost,
     host_version: &str,

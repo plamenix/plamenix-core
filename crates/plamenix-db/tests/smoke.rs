@@ -18,6 +18,7 @@ fn fake_config() -> ConnectionConfig {
         encryption_key: None,
         fbclient_path: None,
         encryption_required: false,
+        charset: None,
     }
 }
 

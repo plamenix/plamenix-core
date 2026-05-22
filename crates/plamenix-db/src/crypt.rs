@@ -15,11 +15,12 @@
 //! `encryption_required` enforcement path inside `connect`.
 
 use serde::{Deserialize, Serialize};
+use specta::Type;
 
 use crate::error::DbError;
 
 /// Encryption state of an attached Firebird database.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum CryptState {
     /// Database file is unencrypted.

@@ -56,7 +56,7 @@
 //! let key = SigningKey::generate(&mut OsRng);
 //! sign_archive(&plx_path, &key, Some("ci-bot"))?;
 //! let outcome = verify_archive(&plx_path)?;
-//! assert!(matches!(outcome, VerificationOutcome::Valid { .. }));
+//! assert!(matches!(outcome, VerificationOutcome::SelfSigned { .. }));
 //! ```
 
 use std::collections::BTreeMap;
@@ -101,9 +101,21 @@ pub struct PluginSignature {
 /// Verdict returned by [`verify_archive`].
 #[derive(Debug)]
 pub enum VerificationOutcome {
-    /// Signature verified successfully. Carries the public key + key
-    /// id from the signature for the host to display.
-    Valid {
+    /// The archive's contents match the signature, and the signature
+    /// matches the key **carried inside the archive**.
+    ///
+    /// This is an integrity result, not an identity one, and the name
+    /// says so deliberately. Anyone can generate a keypair and sign
+    /// their own bundle, so this proves the archive was not altered
+    /// after it was signed — nothing about who signed it. Establishing
+    /// that needs a key the host already trusts, which needs a curator;
+    /// Plamenix has neither. See the trust model in
+    /// `plamenix/docs/plugin-architecture.md`.
+    ///
+    /// Surface the key to the user rather than interpreting it for
+    /// them: a green "verified" badge on this outcome would assert
+    /// something the host cannot know.
+    SelfSigned {
         public_key_hex: String,
         key_id: String,
         signed_at: String,
@@ -308,7 +320,7 @@ fn verify_archive_from_reader<R: Read + Seek>(
     verifying_key
         .verify(&digest, &signature)
         .map_err(|err| PluginError::SignatureInvalid(err.to_string()))?;
-    Ok(VerificationOutcome::Valid {
+    Ok(VerificationOutcome::SelfSigned {
         public_key_hex: parsed.public_key,
         key_id: parsed.key_id,
         signed_at: parsed.signed_at,
@@ -375,7 +387,7 @@ optional = []
         assert_eq!(sig.public_key.len(), 64); // 32 bytes hex
         assert_eq!(sig.signature.len(), 128); // 64 bytes hex
         let outcome = verify_archive(&plx).unwrap();
-        let VerificationOutcome::Valid {
+        let VerificationOutcome::SelfSigned {
             public_key_hex,
             key_id,
             ..
@@ -392,7 +404,7 @@ optional = []
         let _sig_a = sign_archive(&plx, &key_a, "a").unwrap();
         let sig_b = sign_archive(&plx, &key_b, "b").unwrap();
         let outcome = verify_archive(&plx).unwrap();
-        let VerificationOutcome::Valid {
+        let VerificationOutcome::SelfSigned {
             public_key_hex,
             key_id,
             ..

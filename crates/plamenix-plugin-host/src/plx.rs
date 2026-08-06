@@ -38,6 +38,13 @@ use std::fs::{File, create_dir_all};
 use std::io::{BufReader, Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
+/// Most bytes one archive member may expand to: 64 MiB.
+pub const MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+/// Most bytes an archive may expand to in total: 256 MiB.
+pub const MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
+/// Most members an archive may declare.
+pub const MAX_ARCHIVE_ENTRIES: usize = 10_000;
+
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
@@ -201,7 +208,15 @@ fn extract_plx_from_reader<R: Read + std::io::Seek>(
 ) -> Result<(), PluginError> {
     let mut archive = ZipArchive::new(reader).map_err(zip_runtime_err)?;
 
+    if archive.len() > MAX_ARCHIVE_ENTRIES {
+        return Err(PluginError::ArchiveTooLarge(format!(
+            "archive declares {} entries, over the {MAX_ARCHIVE_ENTRIES} limit",
+            archive.len(),
+        )));
+    }
+
     let mut saw_manifest = false;
+    let mut total_written: u64 = 0;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(zip_runtime_err)?;
         if !entry.is_file() {
@@ -214,12 +229,42 @@ fn extract_plx_from_reader<R: Read + std::io::Seek>(
         if safe_rel.as_os_str() == MANIFEST_NAME {
             saw_manifest = true;
         }
+
+        // Budget checked against the header before writing, and again
+        // against the bytes actually copied. The header is attacker
+        // controlled, so it is a cheap early exit rather than the
+        // guarantee — a lying header is caught by the second check.
+        let declared = entry.size();
+        if declared > MAX_ENTRY_BYTES {
+            return Err(PluginError::ArchiveTooLarge(format!(
+                "entry `{name}` declares {declared} bytes, over the \
+                 {MAX_ENTRY_BYTES}-byte per-entry limit",
+            )));
+        }
+        if total_written.saturating_add(declared) > MAX_TOTAL_BYTES {
+            return Err(PluginError::ArchiveTooLarge(format!(
+                "archive expands past the {MAX_TOTAL_BYTES}-byte limit",
+            )));
+        }
+
         let out_path = dest_dir.join(&safe_rel);
         if let Some(parent) = out_path.parent() {
             create_dir_all(parent)?;
         }
         let mut out_file = File::create(&out_path)?;
-        std::io::copy(&mut entry, &mut out_file)?;
+        // Capped copy: a zip bomb declares a small size and then
+        // decompresses to far more, so the reader is bounded rather
+        // than trusted to stop.
+        let remaining = MAX_TOTAL_BYTES - total_written;
+        let budget = remaining.min(MAX_ENTRY_BYTES).saturating_add(1);
+        let written = std::io::copy(&mut entry.by_ref().take(budget), &mut out_file)?;
+        if written > MAX_ENTRY_BYTES || total_written.saturating_add(written) > MAX_TOTAL_BYTES {
+            return Err(PluginError::ArchiveTooLarge(format!(
+                "entry `{name}` expanded past its declared size and the \
+                 extraction limit",
+            )));
+        }
+        total_written = total_written.saturating_add(written);
         out_file.flush()?;
     }
 
@@ -282,6 +327,72 @@ fn zip_runtime_err(err: impl std::fmt::Display) -> PluginError {
 #[allow(dead_code)]
 fn _silence(w: &mut dyn Write) {
     let _ = w;
+}
+
+#[cfg(test)]
+mod extraction_limit_tests {
+    use super::*;
+    use std::io::Cursor;
+    use tempfile::tempdir;
+    use zip::write::SimpleFileOptions;
+
+    /// Builds an in-memory zip whose single member expands to
+    /// `size` bytes of highly compressible data.
+    fn bomb(size: usize) -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let mut zip = ZipWriter::new(Cursor::new(&mut buf));
+            let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            zip.start_file(MANIFEST_NAME, opts).expect("manifest");
+            zip.write_all(b"[plugin]\n").expect("write manifest");
+            zip.start_file("payload.bin", opts).expect("payload");
+            // Zeroes compress to almost nothing, which is the whole
+            // point: the archive on disk stays tiny.
+            zip.write_all(&vec![0u8; size]).expect("write payload");
+            zip.finish().expect("finish");
+        }
+        buf
+    }
+
+    #[test]
+    fn an_entry_expanding_past_the_limit_is_refused() {
+        let archive = bomb((MAX_ENTRY_BYTES + 1) as usize);
+        // The compressed archive is a rounding error next to what it
+        // expands to — that asymmetry is the attack.
+        assert!(
+            (archive.len() as u64) < MAX_ENTRY_BYTES / 100,
+            "expected a highly compressible archive, got {} bytes",
+            archive.len(),
+        );
+
+        let dir = tempdir().expect("tempdir");
+        let err = extract_plx_from_reader(Cursor::new(archive), dir.path())
+            .expect_err("oversized entry must be refused");
+        assert!(
+            matches!(err, PluginError::ArchiveTooLarge(_)),
+            "expected ArchiveTooLarge, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn an_archive_within_the_limits_still_extracts() {
+        let archive = bomb(1024);
+        let dir = tempdir().expect("tempdir");
+        extract_plx_from_reader(Cursor::new(archive), dir.path()).expect("normal archive");
+        assert!(dir.path().join(MANIFEST_NAME).exists());
+        assert_eq!(
+            std::fs::metadata(dir.path().join("payload.bin"))
+                .expect("payload")
+                .len(),
+            1024,
+        );
+    }
+
+    #[test]
+    fn the_limits_are_ordered_sensibly() {
+        // A per-entry cap above the total would never fire.
+        assert!(MAX_ENTRY_BYTES <= MAX_TOTAL_BYTES);
+    }
 }
 
 #[cfg(test)]

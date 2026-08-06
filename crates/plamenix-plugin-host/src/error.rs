@@ -40,6 +40,14 @@ pub enum PluginError {
     #[error("wasm runtime error: {0}")]
     Runtime(String),
 
+    /// The archive expands to more than the extraction limits allow.
+    ///
+    /// Compression ratios are unbounded, so a small `.plx` can declare
+    /// or decompress to far more than the disk can hold. Refused rather
+    /// than truncated: a partially extracted plugin is not a plugin.
+    #[error("archive too large: {0}")]
+    ArchiveTooLarge(String),
+
     /// IO error reading bundle files.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),

@@ -188,7 +188,7 @@ optional = []
         let sig = sign(&plx, &kg.secret_path, "cli-test").unwrap();
         assert_eq!(sig.public_key, kg.public_key_hex);
         let outcome = verify_archive(&plx).unwrap();
-        let VerificationOutcome::Valid {
+        let VerificationOutcome::SelfSigned {
             public_key_hex,
             key_id,
             ..

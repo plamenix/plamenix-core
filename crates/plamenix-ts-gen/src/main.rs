@@ -11,7 +11,10 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use plamenix_db::{Column, ColumnValue, CryptState, QueryResult, Row, StatementOutcome};
+use plamenix_db::{
+    Column, ColumnValue, CryptState, QueryResult, Row, StatementOutcome, TxConfig, TxIsolation,
+    TxLocking, TxMode, TxStatus,
+};
 use plamenix_profiles::{Profile, ProfileId};
 use plamenix_types::{
     AttachmentInfo, ColumnInfo, ConnectionConfig, DatabaseAlias, DatabaseStats, DomainInfo,
@@ -60,6 +63,11 @@ fn main() -> ExitCode {
         .register::<Row>()
         .register::<QueryResult>()
         .register::<StatementOutcome>()
+        .register::<TxMode>()
+        .register::<TxIsolation>()
+        .register::<TxLocking>()
+        .register::<TxConfig>()
+        .register::<TxStatus>()
         .register::<Profile>()
         .register::<ProfileId>();
 

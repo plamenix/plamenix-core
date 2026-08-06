@@ -11,9 +11,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::sync::{Arc, Mutex};
+
 use plamenix_plugin_host::{
-    DispatchOutcome, EventBus, HostState, InstanceRegistry, PluginHost, activate_into_registry,
-    dispatch_event, load,
+    DispatchOutcome, EventBus, HostState, InstanceRegistry, LogSink, PluginHost,
+    activate_into_registry, dispatch_event, load,
 };
 use semver::Version;
 
@@ -40,34 +42,70 @@ wasm = "plugin.wasm"
 }
 
 async fn activate(host: &PluginHost, registry: &InstanceRegistry, dir: &std::path::Path) {
+    activate_capturing_logs(host, registry, dir).await;
+}
+
+/// Activates with a log sink attached.
+///
+/// The fixture's `handle_event` logs the topic and payload it was
+/// handed, which is the only way from outside the sandbox to tell a
+/// plugin that read its arguments from one whose handler is empty.
+/// Asserting on `Delivered` alone cannot distinguish them.
+async fn activate_capturing_logs(
+    host: &PluginHost,
+    registry: &InstanceRegistry,
+    dir: &std::path::Path,
+) -> LogSink {
     stage(dir);
     let version = Version::parse("1.0.0-beta").expect("version");
     let staged = load(host, &version, dir).expect("load");
+    let sink: LogSink = Arc::new(Mutex::new(Vec::new()));
     activate_into_registry(
         host,
-        HostState::new(&staged.manifest.plugin.id, "1.0.0-beta"),
+        HostState::new(&staged.manifest.plugin.id, "1.0.0-beta").with_log_sink(Arc::clone(&sink)),
         &staged,
         registry,
     )
     .await
     .expect("activate");
+    sink
+}
+
+fn logged_lines(sink: &LogSink) -> Vec<String> {
+    sink.lock()
+        .expect("log sink")
+        .iter()
+        .map(|entry| entry.message.clone())
+        .collect()
 }
 
 #[tokio::test]
-async fn an_emit_reaches_a_subscribed_plugin() {
+async fn an_emit_reaches_a_subscribed_plugin_with_its_topic_and_payload() {
     let host = PluginHost::new().expect("host");
     let registry = InstanceRegistry::new();
     let dir = tempfile::tempdir().expect("tempdir");
-    activate(&host, &registry, dir.path()).await;
+    let sink = activate_capturing_logs(&host, &registry, dir.path()).await;
 
     let bus = EventBus::new();
     bus.subscribe(PLUGIN_ID, "db/query/**").expect("subscribe");
 
-    let deliveries = dispatch_event(&bus, &registry, "db/query/executed", "{}").await;
+    let deliveries =
+        dispatch_event(&bus, &registry, "db/query/executed", r#"{"statements":3}"#).await;
 
     assert_eq!(deliveries.len(), 1, "unexpected deliveries: {deliveries:?}");
     assert_eq!(deliveries[0].plugin_id, PLUGIN_ID);
     assert_eq!(deliveries[0].outcome, DispatchOutcome::Delivered);
+
+    // `Delivered` only says the call returned. This says the plugin
+    // actually received the arguments — an empty handler would satisfy
+    // the assertion above and fail this one.
+    let lines = logged_lines(&sink);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("db/query/executed") && line.contains(r#"{"statements":3}"#)),
+        "plugin did not observe the topic and payload; logged: {lines:?}",
+    );
 }
 
 #[tokio::test]

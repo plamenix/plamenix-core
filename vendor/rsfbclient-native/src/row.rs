@@ -726,23 +726,20 @@ fn format_isc_time(isc_time: u32) -> String {
     format!("{hours:02}:{mins:02}:{secs:02}.{frac:04}")
 }
 
-/// Renders a Firebird timezone id. Per Firebird 4 `TimeZoneUtil`:
-/// values 0..1439 are minutes east of UTC, 1440..2879 are minutes
-/// west of UTC, everything else is a named region (IANA db). Named
-/// regions are surfaced opaquely — resolving the name requires a
-/// call to `MON$TIME_ZONES`, which is out of scope here.
+/// Renders a Firebird timezone id. Per Firebird 4 `TimeZoneUtil`, an
+/// offset zone is stored as its displacement in minutes plus
+/// `ONE_DAY` (1440), so 1440 is UTC, below it is west of UTC and
+/// above it is east. Ids past the offset range are named regions
+/// (IANA db), surfaced opaquely — resolving the name requires a call
+/// to `MON$TIME_ZONES`, which is out of scope here. That includes
+/// Firebird's `GMT_ZONE` (65535), which therefore renders as a region
+/// rather than `+00:00`.
 fn format_tz_id(id: u16) -> String {
-    if id <= 1439 {
-        let minutes = id as i32;
-        let h = minutes / 60;
-        let m = minutes % 60;
-        return format!("+{h:02}:{m:02}");
-    }
     if id <= 2879 {
-        let minutes = id as i32 - 1440;
-        let h = minutes / 60;
-        let m = minutes % 60;
-        return format!("-{h:02}:{m:02}");
+        let displacement = i32::from(id) - 1440;
+        let sign = if displacement < 0 { '-' } else { '+' };
+        let abs = displacement.abs();
+        return format!("{sign}{:02}:{:02}", abs / 60, abs % 60);
     }
     format!("region:{id}")
 }
@@ -768,4 +765,41 @@ fn dec34_to_string(bytes: [u8; 16]) -> String {
     be.reverse();
     let hex: String = be.iter().map(|b| format!("{b:02x}")).collect();
     format!("decfloat34:0x{hex}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Firebird stores an offset zone as `displacement + ONE_DAY`
+    /// (1440), so the pivot is 1440, not 0. Getting this backwards
+    /// renders every offset zone with an inverted sign — a +02:00
+    /// value reads as -02:00, a four-hour error.
+    #[test]
+    fn offset_zones_decode_around_the_1440_pivot() {
+        assert_eq!(format_tz_id(1440), "+00:00");
+        assert_eq!(format_tz_id(1500), "+01:00");
+        assert_eq!(format_tz_id(1560), "+02:00");
+        assert_eq!(format_tz_id(1380), "-01:00");
+        assert_eq!(format_tz_id(1245), "-03:15");
+    }
+
+    #[test]
+    fn offset_zones_cover_the_full_encodable_range() {
+        assert_eq!(format_tz_id(0), "-24:00");
+        assert_eq!(format_tz_id(2879), "+23:59");
+    }
+
+    #[test]
+    fn ids_past_the_offset_range_are_opaque_regions() {
+        assert_eq!(format_tz_id(2880), "region:2880");
+        assert_eq!(format_tz_id(65535), "region:65535");
+    }
+
+    #[test]
+    fn isc_time_keeps_fixed_width_fractional_ticks() {
+        assert_eq!(format_isc_time(0), "00:00:00.0000");
+        assert_eq!(format_isc_time(10_000), "00:00:01.0000");
+        assert_eq!(format_isc_time(45_296_500_0), "12:34:56.5000");
+    }
 }

@@ -9,6 +9,12 @@
 # will likely look very different (and much more reasonable).
 # See Cargo.toml.orig for the original contents.
 
+# Standalone workspace root: this crate is consumed through the
+# parent's [patch.crates-io], not as a workspace member, so cargo
+# would otherwise walk up and reject it. Declaring it here lets its
+# own unit tests run (`just test-vendor`).
+[workspace]
+
 [package]
 edition = "2021"
 name = "rsfbclient-native"

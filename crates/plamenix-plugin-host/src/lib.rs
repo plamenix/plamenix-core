@@ -51,7 +51,9 @@ pub use activator::{
 };
 pub use capability::{LogicalDir, OsKeyring, Permission, PermissionGrant, PermissionSet};
 pub use concurrency::{CallPermit, InFlightAcquireError, InFlightLimiter, MAX_IN_FLIGHT_DEFAULT};
-pub use dispatch::{Delivery, DispatchOutcome, dispatch_event};
+pub use dispatch::{
+    Delivery, DispatchOutcome, SupervisedDelivery, dispatch_event, dispatch_event_supervised,
+};
 pub use epoch::{
     BACKGROUND_DEADLINE_MS, CallClass, EPOCH_TICK_MS, EpochTicker, INTERACTIVE_DEADLINE_MS,
 };

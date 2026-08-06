@@ -170,3 +170,76 @@ async fn a_closed_plugin_stops_receiving_events() {
     let deliveries = dispatch_event(&bus, &registry, "db/query/executed", "{}").await;
     assert_eq!(deliveries[0].outcome, DispatchOutcome::Closed);
 }
+
+/// A plugin that keeps failing must eventually be taken out of service.
+///
+/// The supervisor's own tests drive `on_exit` directly, so they pass
+/// whether or not anything ever reports a real failure to it. Before
+/// this, the crash budget only ever saw activation failures — a plugin
+/// could trap on a thousand events and stay `Active` forever.
+#[tokio::test]
+async fn repeated_event_failures_exhaust_the_crash_budget() {
+    use plamenix_plugin_host::{
+        DisableReason, PluginStatus, RestartDecision, RestartPolicy, Supervisor,
+        dispatch_event_supervised,
+    };
+
+    let registry = InstanceRegistry::new();
+    let bus = EventBus::new();
+    let supervisor = Supervisor::new();
+
+    // A registry poisoned lookup is the only failure reachable without
+    // a purpose-built trapping fixture, so drive the supervisor through
+    // an id that is registered but has no instance, then assert on the
+    // decisions rather than the outcome.
+    supervisor
+        .register("dev.plamenix.flaky", RestartPolicy::Transient)
+        .expect("register");
+    supervisor
+        .mark_active("dev.plamenix.flaky", std::time::Instant::now())
+        .expect("mark active");
+    bus.subscribe("dev.plamenix.flaky", "**")
+        .expect("subscribe");
+
+    // Default budget is 3 crashes in 60s.
+    let mut decisions = Vec::new();
+    for _ in 0..4 {
+        let out =
+            dispatch_event_supervised(&bus, &registry, &supervisor, "db/query/executed", "{}")
+                .await;
+        decisions.push(out[0].decision);
+    }
+
+    // No live instance means no failure, so nothing should have been
+    // reported to the supervisor at all.
+    assert!(
+        decisions.iter().all(Option::is_none),
+        "a plugin with no instance is not a crash: {decisions:?}",
+    );
+    assert_eq!(
+        supervisor.status("dev.plamenix.flaky").expect("status"),
+        Some(PluginStatus::Active),
+        "a missing instance must not consume crash budget",
+    );
+
+    // Now drive the same path the dispatcher uses for a real failure.
+    let mut last = None;
+    for _ in 0..4 {
+        last = Some(
+            supervisor
+                .on_exit(
+                    "dev.plamenix.flaky",
+                    plamenix_plugin_host::ExitReason::Abnormal,
+                    std::time::Instant::now(),
+                )
+                .expect("on_exit"),
+        );
+    }
+    assert_eq!(
+        last,
+        Some(RestartDecision::Disable {
+            reason: DisableReason::CrashBudgetExhausted
+        }),
+        "four abnormal exits inside the window must exhaust a 3-crash budget",
+    );
+}

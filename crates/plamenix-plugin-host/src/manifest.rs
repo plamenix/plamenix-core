@@ -342,7 +342,10 @@ impl RawPermissionGrant {
     fn into_grant(self) -> Result<PermissionGrant, PluginError> {
         match self {
             Self::Plain(raw) => Ok(PermissionGrant::new(Permission::parse(&raw)?)),
-            Self::Detailed { capability, purpose } => {
+            Self::Detailed {
+                capability,
+                purpose,
+            } => {
                 let cap = Permission::parse(&capability)?;
                 Ok(match purpose {
                     Some(p) if !p.is_empty() => PermissionGrant::with_purpose(cap, p),

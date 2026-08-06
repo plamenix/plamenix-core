@@ -91,8 +91,8 @@ pub fn init() -> Result<(TracingGuard, InitOutcome), InitError> {
     #[cfg(feature = "otlp")]
     {
         if let Some(endpoint) = read_otlp_endpoint() {
-            let service_name = std::env::var("OTEL_SERVICE_NAME")
-                .unwrap_or_else(|_| "plamenix".to_string());
+            let service_name =
+                std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "plamenix".to_string());
             let (provider, otel_layer) = build_otlp_layer(&endpoint, &service_name)?;
             tracing_subscriber::registry()
                 .with(filter)

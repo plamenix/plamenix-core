@@ -87,8 +87,8 @@ pub async fn activate_subprocess(
         .chain(manifest.permissions.optional_caps())
         .map(Permission::to_string)
         .collect();
-    let permissions_json =
-        serde_json::to_string(&permission_strings).map_err(|err| PluginError::Runtime(err.to_string()))?;
+    let permissions_json = serde_json::to_string(&permission_strings)
+        .map_err(|err| PluginError::Runtime(err.to_string()))?;
 
     let spawn = Command::new(&binary)
         .arg("--activate")

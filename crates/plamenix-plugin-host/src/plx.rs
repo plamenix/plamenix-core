@@ -332,7 +332,8 @@ ui = "ui.mjs"
 
         let extract_dir = tempdir().unwrap();
         extract_plx(&plx, extract_dir.path()).unwrap();
-        let extracted_manifest = std::fs::read_to_string(extract_dir.path().join(MANIFEST_NAME)).unwrap();
+        let extracted_manifest =
+            std::fs::read_to_string(extract_dir.path().join(MANIFEST_NAME)).unwrap();
         assert_eq!(extracted_manifest.trim(), minimal_manifest().trim());
         let extracted_ui = std::fs::read_to_string(extract_dir.path().join(UI_NAME)).unwrap();
         assert_eq!(extracted_ui, "// ui");
@@ -394,8 +395,7 @@ ui = "ui.mjs"
         let plx = tempdir().unwrap().keep().join("no-manifest.plx");
         let f = File::create(&plx).unwrap();
         let mut w = ZipWriter::new(f);
-        let opt = SimpleFileOptions::default()
-            .compression_method(CompressionMethod::Deflated);
+        let opt = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
         w.start_file(UI_NAME, opt).unwrap();
         w.write_all(b"// ui").unwrap();
         w.finish().unwrap();
@@ -412,8 +412,7 @@ ui = "ui.mjs"
         let plx = tempdir().unwrap().keep().join("traversal.plx");
         let f = File::create(&plx).unwrap();
         let mut w = ZipWriter::new(f);
-        let opt = SimpleFileOptions::default()
-            .compression_method(CompressionMethod::Deflated);
+        let opt = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
         // Include a real manifest entry too so the archive isn't
         // rejected on the manifest-missing check.
         w.start_file(MANIFEST_NAME, opt).unwrap();
@@ -439,8 +438,7 @@ ui = "ui.mjs"
         let plx = tempdir().unwrap().keep().join("absolute.plx");
         let f = File::create(&plx).unwrap();
         let mut w = ZipWriter::new(f);
-        let opt = SimpleFileOptions::default()
-            .compression_method(CompressionMethod::Deflated);
+        let opt = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
         w.start_file(MANIFEST_NAME, opt).unwrap();
         w.write_all(minimal_manifest().as_bytes()).unwrap();
         w.start_file("/etc/passwd", opt).unwrap();

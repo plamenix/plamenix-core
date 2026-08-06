@@ -34,7 +34,10 @@ ui = "ui.mjs"
 requires_subprocess = true
 "#;
     let err = Manifest::parse(manifest).unwrap_err();
-    assert!(matches!(err, PluginError::MissingSubprocessEntry), "{err:?}");
+    assert!(
+        matches!(err, PluginError::MissingSubprocessEntry),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -54,7 +57,10 @@ subprocess = "bin/plugin"
 requires_subprocess = true
 "#;
     let err = Manifest::parse(manifest).unwrap_err();
-    assert!(matches!(err, PluginError::MissingSubprocessCapability), "{err:?}");
+    assert!(
+        matches!(err, PluginError::MissingSubprocessCapability),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -141,7 +147,10 @@ requires_subprocess = true
         let dir = stage_bundle(r#"{"status":"ok"}"#, 1);
         let staged = load(&host, &host_version(), dir.path()).unwrap();
         let err = activate(&host, "1.0.0-beta", &staged).await.unwrap_err();
-        assert!(matches!(err, PluginError::SubprocessFailed { code: Some(1), .. }), "{err:?}");
+        assert!(
+            matches!(err, PluginError::SubprocessFailed { code: Some(1), .. }),
+            "{err:?}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

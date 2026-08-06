@@ -177,7 +177,10 @@ mod tests {
 
     #[test]
     fn interactive_deadline_is_100ms() {
-        assert_eq!(CallClass::Interactive.deadline(), Duration::from_millis(100));
+        assert_eq!(
+            CallClass::Interactive.deadline(),
+            Duration::from_millis(100)
+        );
     }
 
     #[test]

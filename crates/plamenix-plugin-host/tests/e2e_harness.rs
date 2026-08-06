@@ -101,7 +101,10 @@ pub async fn load_and_activate(
 ) -> StagedPlugin {
     let staged = load_staged(host, bundle_dir);
     supervisor
-        .register(&staged.manifest.plugin.id, staged.manifest.plugin.restart_policy)
+        .register(
+            &staged.manifest.plugin.id,
+            staged.manifest.plugin.restart_policy,
+        )
         .unwrap();
     let state = HostState::new(&staged.manifest.plugin.id, "1.0.0-beta");
     let outcome = activate_into_registry(host, state, &staged, registry)

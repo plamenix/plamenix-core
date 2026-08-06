@@ -12,7 +12,13 @@ use plamenix_secrets::{InMemoryStore, SecretRef, SecretStore};
 const SERVICE: &str = "dev.plamenix.test";
 
 fn sample_profile() -> Profile {
-    Profile::new("Local Dev", "127.0.0.1", 3050, "/var/lib/firebird/data/test.fdb", "SYSDBA")
+    Profile::new(
+        "Local Dev",
+        "127.0.0.1",
+        3050,
+        "/var/lib/firebird/data/test.fdb",
+        "SYSDBA",
+    )
 }
 
 #[test]
@@ -71,14 +77,20 @@ fn invalid_file_surfaces_typed_error() {
     let path = dir.path().join("profiles.json");
     std::fs::write(&path, b"{not json").unwrap();
     let store = JsonFileStore::new(&path);
-    assert!(matches!(store.list(), Err(ProfileError::InvalidFile { .. })));
+    assert!(matches!(
+        store.list(),
+        Err(ProfileError::InvalidFile { .. })
+    ));
 }
 
 #[test]
 fn resolve_uses_keyring_secret_when_ref_present() {
     let secrets = InMemoryStore::new();
     secrets
-        .store(&SecretRef::new(SERVICE, "profile:demo:password"), "fromKeyring")
+        .store(
+            &SecretRef::new(SERVICE, "profile:demo:password"),
+            "fromKeyring",
+        )
         .unwrap();
 
     let mut profile = sample_profile();

@@ -124,10 +124,15 @@ async fn transient_policy_restarts_on_abnormal_then_disables_after_budget() {
     let staged = load(&host, &host_version(), dir.path()).unwrap();
 
     supervisor
-        .register(&staged.manifest.plugin.id, staged.manifest.plugin.restart_policy)
+        .register(
+            &staged.manifest.plugin.id,
+            staged.manifest.plugin.restart_policy,
+        )
         .unwrap();
     let state = HostState::new(&staged.manifest.plugin.id, "1.0.0-beta");
-    let _ = activate_into_registry(&host, state, &staged, &registry).await.unwrap();
+    let _ = activate_into_registry(&host, state, &staged, &registry)
+        .await
+        .unwrap();
     supervisor
         .mark_active(&staged.manifest.plugin.id, Instant::now())
         .unwrap();
@@ -177,10 +182,15 @@ async fn temporary_policy_never_restarts() {
     std::fs::write(dir.path().join("ui.mjs"), "// ui").unwrap();
     let staged = load(&host, &host_version(), dir.path()).unwrap();
     supervisor
-        .register(&staged.manifest.plugin.id, staged.manifest.plugin.restart_policy)
+        .register(
+            &staged.manifest.plugin.id,
+            staged.manifest.plugin.restart_policy,
+        )
         .unwrap();
     let state = HostState::new(&staged.manifest.plugin.id, "1.0.0-beta");
-    let _ = activate_into_registry(&host, state, &staged, &registry).await.unwrap();
+    let _ = activate_into_registry(&host, state, &staged, &registry)
+        .await
+        .unwrap();
     supervisor
         .mark_active(&staged.manifest.plugin.id, Instant::now())
         .unwrap();
@@ -209,10 +219,15 @@ async fn permanent_policy_restarts_on_both_normal_and_abnormal() {
     std::fs::write(dir.path().join("ui.mjs"), "// ui").unwrap();
     let staged = load(&host, &host_version(), dir.path()).unwrap();
     supervisor
-        .register(&staged.manifest.plugin.id, staged.manifest.plugin.restart_policy)
+        .register(
+            &staged.manifest.plugin.id,
+            staged.manifest.plugin.restart_policy,
+        )
         .unwrap();
     let state = HostState::new(&staged.manifest.plugin.id, "1.0.0-beta");
-    let _ = activate_into_registry(&host, state, &staged, &registry).await.unwrap();
+    let _ = activate_into_registry(&host, state, &staged, &registry)
+        .await
+        .unwrap();
     supervisor
         .mark_active(&staged.manifest.plugin.id, Instant::now())
         .unwrap();
@@ -245,7 +260,9 @@ async fn re_enable_clears_disabled_state_and_resets_budget() {
         .register(&plugin_id, staged.manifest.plugin.restart_policy)
         .unwrap();
     let state = HostState::new(&plugin_id, "1.0.0-beta");
-    let _ = activate_into_registry(&host, state, &staged, &registry).await.unwrap();
+    let _ = activate_into_registry(&host, state, &staged, &registry)
+        .await
+        .unwrap();
     supervisor.mark_active(&plugin_id, Instant::now()).unwrap();
 
     // Drive 3 abnormal exits to exhaust the budget.
@@ -280,10 +297,7 @@ async fn user_requested_exit_overrides_policy() {
         .on_exit("p", ExitReason::UserRequested, Instant::now())
         .unwrap();
     assert_eq!(decision, RestartDecision::Stop);
-    assert_eq!(
-        supervisor.status("p").unwrap(),
-        Some(PluginStatus::Stopped),
-    );
+    assert_eq!(supervisor.status("p").unwrap(), Some(PluginStatus::Stopped),);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -292,13 +306,19 @@ async fn supervisor_isolates_crashes_between_plugins() {
     // remains Active + healthy. Verifies cross-plugin state isolation
     // in the supervisor's HashMap.
     let supervisor = Supervisor::new();
-    supervisor.register("crasher", RestartPolicy::Transient).unwrap();
-    supervisor.register("healthy", RestartPolicy::Transient).unwrap();
+    supervisor
+        .register("crasher", RestartPolicy::Transient)
+        .unwrap();
+    supervisor
+        .register("healthy", RestartPolicy::Transient)
+        .unwrap();
     let t = Instant::now();
     supervisor.mark_active("crasher", t).unwrap();
     supervisor.mark_active("healthy", t).unwrap();
     for _ in 0..3 {
-        let _ = supervisor.on_exit("crasher", ExitReason::Abnormal, t).unwrap();
+        let _ = supervisor
+            .on_exit("crasher", ExitReason::Abnormal, t)
+            .unwrap();
     }
     assert_eq!(
         supervisor.status("crasher").unwrap(),

@@ -199,8 +199,8 @@ impl JsonSecretStore {
             if bytes.is_empty() {
                 HashMap::new()
             } else {
-                let list: Vec<(SecretRef, String)> = serde_json::from_slice(&bytes)
-                    .map_err(|err| {
+                let list: Vec<(SecretRef, String)> =
+                    serde_json::from_slice(&bytes).map_err(|err| {
                         SecretError::Backend(format!(
                             "failed to parse secrets file {}: {err}",
                             path.display()
@@ -219,9 +219,8 @@ impl JsonSecretStore {
 
     fn flush(&self, entries: &HashMap<SecretRef, String>) -> Result<(), SecretError> {
         let list: Vec<(&SecretRef, &String)> = entries.iter().collect();
-        let bytes = serde_json::to_vec_pretty(&list).map_err(|err| {
-            SecretError::Backend(format!("failed to serialise secrets: {err}"))
-        })?;
+        let bytes = serde_json::to_vec_pretty(&list)
+            .map_err(|err| SecretError::Backend(format!("failed to serialise secrets: {err}")))?;
         let tmp = self.path.with_extension("json.tmp");
         fs::write(&tmp, &bytes).map_err(|err| {
             SecretError::Backend(format!(

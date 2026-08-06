@@ -129,7 +129,9 @@ mod limit_tests {
         assert!(is_select_like("SELECT * FROM T"));
         assert!(is_select_like("  select 1 from rdb$database"));
         assert!(is_select_like("WITH cte AS (SELECT 1) SELECT * FROM cte"));
-        assert!(is_select_like("EXECUTE BLOCK RETURNS (n INT) AS BEGIN SUSPEND; END"));
+        assert!(is_select_like(
+            "EXECUTE BLOCK RETURNS (n INT) AS BEGIN SUSPEND; END"
+        ));
         assert!(!is_select_like("UPDATE t SET c = 1"));
         assert!(!is_select_like("DROP TABLE t"));
     }
@@ -172,7 +174,11 @@ mod limit_tests {
 /// returns one of these per statement. Execution stops at the first
 /// failure so the user sees exactly which statement broke the batch.
 #[derive(Clone, Debug, Serialize, Deserialize, Type)]
-#[serde(tag = "status", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "status",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum StatementOutcome {
     /// Statement ran successfully.
     Ok {
@@ -321,7 +327,10 @@ mod tests {
     #[test]
     fn two_statements() {
         let stmts = split_statements("SELECT 1; UPDATE t SET c = 2");
-        assert_eq!(stmts, vec!["SELECT 1".to_string(), "UPDATE t SET c = 2".to_string()]);
+        assert_eq!(
+            stmts,
+            vec!["SELECT 1".to_string(), "UPDATE t SET c = 2".to_string()]
+        );
     }
 
     #[test]
@@ -349,7 +358,10 @@ mod tests {
     #[test]
     fn line_comments_swallow_semicolons() {
         let stmts = split_statements("SELECT 1; -- end ;\nSELECT 2");
-        assert_eq!(stmts, vec!["SELECT 1".to_string(), "-- end ;\nSELECT 2".to_string()]);
+        assert_eq!(
+            stmts,
+            vec!["SELECT 1".to_string(), "-- end ;\nSELECT 2".to_string()]
+        );
     }
 
     #[test]

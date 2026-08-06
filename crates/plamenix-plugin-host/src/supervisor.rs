@@ -129,7 +129,10 @@ impl CrashBudget {
     /// Returns the default budget (3 crashes / 60s).
     #[must_use]
     pub fn default_budget() -> Self {
-        Self::new(DEFAULT_MAX_CRASHES, Duration::from_secs(DEFAULT_WINDOW_SECS))
+        Self::new(
+            DEFAULT_MAX_CRASHES,
+            Duration::from_secs(DEFAULT_WINDOW_SECS),
+        )
     }
 
     /// Records a crash at `now`. Returns whether the budget is now
@@ -463,9 +466,7 @@ mod tests {
         let sup = Supervisor::new();
         sup.register("p1", RestartPolicy::Transient).unwrap();
         sup.mark_active("p1", now()).unwrap();
-        let _ = sup
-            .on_exit("p1", ExitReason::Abnormal, now())
-            .unwrap();
+        let _ = sup.on_exit("p1", ExitReason::Abnormal, now()).unwrap();
         sup.register("p1", RestartPolicy::Permanent).unwrap();
         let state = sup.state("p1").unwrap().unwrap();
         assert_eq!(state.status, PluginStatus::Loaded);

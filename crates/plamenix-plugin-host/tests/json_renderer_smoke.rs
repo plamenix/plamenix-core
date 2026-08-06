@@ -24,8 +24,8 @@
 use std::path::Path;
 
 use plamenix_plugin_host::{
-    ActivationOutcome, Edition, HostState, InstanceRegistry, PluginHost,
-    activate_into_registry, activate_with_state, load,
+    ActivationOutcome, Edition, HostState, InstanceRegistry, PluginHost, activate_into_registry,
+    activate_with_state, load,
 };
 use semver::Version;
 
@@ -53,7 +53,8 @@ ui = "ui.mjs"
 /// Stub UI module. The activator never reads this — `ui.mjs` is loaded
 /// by the shell's React side at runtime, not by the Rust activator.
 /// Present here so the bundle layout is realistic on disk.
-const UI_STUB: &str = "// stub ui.mjs for the JSON cell renderer smoke test\nexport default function activate() {}\n";
+const UI_STUB: &str =
+    "// stub ui.mjs for the JSON cell renderer smoke test\nexport default function activate() {}\n";
 
 fn stage_bundle(dir: &Path) {
     std::fs::write(dir.join("manifest.toml"), MANIFEST).unwrap();
@@ -95,8 +96,7 @@ async fn web_edition_activates_json_renderer_bundle() {
     assert!(staged.manifest.plugin.supports_edition(Edition::Web));
     assert!(staged.component.is_none());
 
-    let state = HostState::new(&staged.manifest.plugin.id, "1.0.0-beta")
-        .with_edition("web");
+    let state = HostState::new(&staged.manifest.plugin.id, "1.0.0-beta").with_edition("web");
     let outcome = activate_with_state(&host, state, &staged).await.unwrap();
     assert!(
         matches!(outcome, ActivationOutcome::Ok),
@@ -129,10 +129,7 @@ async fn activate_into_registry_skips_registry_for_ui_only_bundles() {
 async fn manifest_targets_block_unlisted_editions() {
     // Stage a JSON renderer manifest restricted to web only +
     // verify desktop install is refused.
-    let restricted = MANIFEST.replace(
-        r#"targets = ["desktop", "web"]"#,
-        r#"targets = ["web"]"#,
-    );
+    let restricted = MANIFEST.replace(r#"targets = ["desktop", "web"]"#, r#"targets = ["web"]"#);
     let host = PluginHost::new().unwrap();
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("manifest.toml"), restricted).unwrap();

@@ -393,7 +393,11 @@ optional = []
         let _sig_a = sign_archive(&plx, &key_a, "a").unwrap();
         let sig_b = sign_archive(&plx, &key_b, "b").unwrap();
         let outcome = verify_archive(&plx).unwrap();
-        let VerificationOutcome::Valid { public_key_hex, key_id, .. } = outcome;
+        let VerificationOutcome::Valid {
+            public_key_hex,
+            key_id,
+            ..
+        } = outcome;
         assert_eq!(public_key_hex, sig_b.public_key);
         assert_eq!(key_id, "b");
     }

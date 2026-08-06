@@ -14,7 +14,10 @@
 //! split keeps the subcommand logic unit-testable without spawning
 //! a process.
 
-#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+#![cfg_attr(
+    not(test),
+    deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
+)]
 
 pub mod build;
 pub mod install;

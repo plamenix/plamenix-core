@@ -144,7 +144,11 @@ impl EventBus {
     ///
     /// Returns the error from [`tokenise_pattern`] when `pattern` is
     /// invalid.
-    pub fn subscribe(&self, plugin_id: impl Into<String>, pattern: impl Into<String>) -> Result<(), String> {
+    pub fn subscribe(
+        &self,
+        plugin_id: impl Into<String>,
+        pattern: impl Into<String>,
+    ) -> Result<(), String> {
         let pattern: String = pattern.into();
         let segments = tokenise_pattern(&pattern)?;
         let plugin_id: String = plugin_id.into();
@@ -202,7 +206,10 @@ impl EventBus {
     /// supervisor's "X subscriptions held" debug summary + tests.
     #[must_use]
     pub fn subscription_count(&self) -> usize {
-        self.inner.lock().map(|g| g.subscriptions.len()).unwrap_or(0)
+        self.inner
+            .lock()
+            .map(|g| g.subscriptions.len())
+            .unwrap_or(0)
     }
 }
 
@@ -234,7 +241,10 @@ mod tests {
         assert!(matches_pattern(&segs("**"), "anything/deeper"));
         // `connection/**` matches every connection-family event.
         assert!(matches_pattern(&segs("connection/**"), "connection/opened"));
-        assert!(matches_pattern(&segs("connection/**"), "connection/health-changed"));
+        assert!(matches_pattern(
+            &segs("connection/**"),
+            "connection/health-changed"
+        ));
         // But not unrelated topics.
         assert!(!matches_pattern(&segs("connection/**"), "tab/opened"));
     }
@@ -257,7 +267,8 @@ mod tests {
     #[test]
     fn subscribe_then_emit_returns_matching_plugin() {
         let bus = EventBus::new();
-        bus.subscribe("com.example.audit", "query/executed").unwrap();
+        bus.subscribe("com.example.audit", "query/executed")
+            .unwrap();
         let matches = bus.emit("query/executed");
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].plugin_id, "com.example.audit");
@@ -267,14 +278,16 @@ mod tests {
     #[test]
     fn emit_returns_empty_when_no_subscribers_match() {
         let bus = EventBus::new();
-        bus.subscribe("com.example.audit", "query/executed").unwrap();
+        bus.subscribe("com.example.audit", "query/executed")
+            .unwrap();
         assert!(bus.emit("query/failed").is_empty());
     }
 
     #[test]
     fn wildcard_subscription_matches_multiple_emits() {
         let bus = EventBus::new();
-        bus.subscribe("com.example.observability", "query/*").unwrap();
+        bus.subscribe("com.example.observability", "query/*")
+            .unwrap();
         assert_eq!(bus.emit("query/executed").len(), 1);
         assert_eq!(bus.emit("query/failed").len(), 1);
         assert!(bus.emit("connection/opened").is_empty());

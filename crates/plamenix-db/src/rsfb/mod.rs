@@ -165,13 +165,14 @@ impl DbDriver for RsfbDriver {
     async fn execute(&self, session: SessionId, sql: String) -> Result<QueryResult, DbError> {
         let shared = self.shared_conn(session).await?;
         let blobs_arc = Arc::clone(&self.blobs);
-        let (result, bin) = tokio::task::spawn_blocking(move || -> Result<(QueryResult, BlobBin), DbError> {
-            let mut guard = shared.blocking_lock();
-            let mut bin: BlobBin = HashMap::new();
-            let result = run_statement(&mut guard, &sql, &mut bin)?;
-            Ok((result, bin))
-        })
-        .await??;
+        let (result, bin) =
+            tokio::task::spawn_blocking(move || -> Result<(QueryResult, BlobBin), DbError> {
+                let mut guard = shared.blocking_lock();
+                let mut bin: BlobBin = HashMap::new();
+                let result = run_statement(&mut guard, &sql, &mut bin)?;
+                Ok((result, bin))
+            })
+            .await??;
         // Replace any previous BLOB cache for this session — fresh
         // execute, fresh handles.
         blobs_arc.lock().await.insert(session, bin);
@@ -333,9 +334,8 @@ where
     if trimmed.is_empty() {
         return Ok(());
     }
-    let charset = rsfbclient::Charset::from_str(trimmed).map_err(|err| {
-        DbError::Connect(format!("invalid charset '{trimmed}': {err}"))
-    })?;
+    let charset = rsfbclient::Charset::from_str(trimmed)
+        .map_err(|err| DbError::Connect(format!("invalid charset '{trimmed}': {err}")))?;
     builder.charset(charset);
     Ok(())
 }
@@ -366,9 +366,8 @@ fn build_pure_rust(config: &ConnectionConfig) -> Result<SimpleConnection, DbErro
     if let Some(name) = config.charset.as_deref() {
         let trimmed = name.trim();
         if !trimmed.is_empty() {
-            let charset = rsfbclient::Charset::from_str(trimmed).map_err(|err| {
-                DbError::Connect(format!("invalid charset '{trimmed}': {err}"))
-            })?;
+            let charset = rsfbclient::Charset::from_str(trimmed)
+                .map_err(|err| DbError::Connect(format!("invalid charset '{trimmed}': {err}")))?;
             builder.charset(charset);
         }
     }
@@ -706,7 +705,10 @@ fn run_describe_generators(conn: &mut SimpleConnection) -> Result<Vec<GeneratorI
                     })
             })
             .unwrap_or(0);
-        out.push(GeneratorInfo { name, current_value });
+        out.push(GeneratorInfo {
+            name,
+            current_value,
+        });
     }
     Ok(out)
 }

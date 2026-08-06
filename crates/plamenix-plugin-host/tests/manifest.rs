@@ -167,7 +167,10 @@ ui = "ui.mjs"
     let manifest = Manifest::parse(text).expect("valid mixed grants");
     assert_eq!(manifest.permissions.required.len(), 2);
     // Plain-string form leaves purpose absent.
-    assert_eq!(manifest.permissions.required[0].capability, Permission::DbSchemaList);
+    assert_eq!(
+        manifest.permissions.required[0].capability,
+        Permission::DbSchemaList
+    );
     assert!(manifest.permissions.required[0].purpose.is_none());
     // Detailed-object form attaches purpose.
     assert!(manifest.permissions.required[1].purpose.is_some());

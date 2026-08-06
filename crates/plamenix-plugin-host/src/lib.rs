@@ -31,17 +31,17 @@ pub mod activator;
 pub mod bindings;
 pub mod capability;
 pub mod concurrency;
-pub mod error;
 pub mod epoch;
+pub mod error;
 pub mod event_bus;
 pub mod host;
 pub mod host_impl;
 pub mod instance;
 pub mod limits;
 pub mod loader;
+pub mod manifest;
 pub mod plx;
 pub mod signing;
-pub mod manifest;
 pub mod subprocess;
 pub mod supervisor;
 
@@ -60,10 +60,15 @@ pub use host::PluginHost;
 pub use host_impl::{HostState, LogLevel, LogSink, RecordedLog, SessionSlot, register_host};
 pub use instance::{InstanceRegistry, PluginInstance};
 pub use limits::{
-    DEFAULT_MAX_INSTANCES, DEFAULT_MAX_MEMORIES, DEFAULT_MAX_MEMORY_BYTES, DEFAULT_MAX_TABLES,
-    DEFAULT_MAX_TABLE_ELEMENTS, ResourceLimits, ResourceLimitsBuilder, ResourceLimitsOverride,
+    DEFAULT_MAX_INSTANCES, DEFAULT_MAX_MEMORIES, DEFAULT_MAX_MEMORY_BYTES,
+    DEFAULT_MAX_TABLE_ELEMENTS, DEFAULT_MAX_TABLES, ResourceLimits, ResourceLimitsBuilder,
+    ResourceLimitsOverride,
 };
 pub use loader::{StagedPlugin, load};
+pub use manifest::{
+    Contributions, Edition, EntryPoints, Manifest, PluginMetadata, RestartPolicy, RuntimeFlags,
+    RuntimeLimits, SidebarPanel,
+};
 pub use plx::{
     MANIFEST_NAME, RESOURCES_DIR, UI_NAME, WASM_NAME, extract_plx, extract_plx_bytes,
     peek_plx_manifest, peek_plx_manifest_bytes, write_plx,
@@ -73,12 +78,8 @@ pub use signing::{
     embed_signature_into_archive, sign_archive, sign_archive_bytes, verify_archive,
     verify_archive_bytes,
 };
-pub use manifest::{
-    Contributions, Edition, EntryPoints, Manifest, PluginMetadata, RestartPolicy, RuntimeFlags,
-    RuntimeLimits, SidebarPanel,
-};
 pub use subprocess::activate_subprocess;
 pub use supervisor::{
-    CrashBudget, CrashBudgetState, DisableReason, ExitReason, PluginStatus,
-    PluginSupervisionState, RestartDecision, Supervisor,
+    CrashBudget, CrashBudgetState, DisableReason, ExitReason, PluginStatus, PluginSupervisionState,
+    RestartDecision, Supervisor,
 };

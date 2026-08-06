@@ -17,7 +17,7 @@ use plamenix_cli::{
 #[command(
     name = "plamenix",
     version,
-    about = "Plamenix plugin authoring CLI (scaffold, build, pack, validate).",
+    about = "Plamenix plugin authoring CLI (scaffold, build, pack, validate)."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -270,9 +270,11 @@ fn run_build(args: BuildArgs) -> Result<(), plamenix_cli::BuildError> {
 }
 
 fn run_new(args: NewArgs) -> Result<(), plamenix_cli::ScaffoldError> {
-    let target = args
-        .path
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join(&args.plugin_id));
+    let target = args.path.unwrap_or_else(|| {
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join(&args.plugin_id)
+    });
     let mut opts = NewPluginOptions::from_id(args.plugin_id);
     if let Some(name) = args.name {
         opts.display_name = name;

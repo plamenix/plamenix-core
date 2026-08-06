@@ -325,9 +325,7 @@ mod tests {
     fn mib_to_bytes_saturates_on_huge_input() {
         // usize::MAX MiB is unrepresentable; saturating-mul prevents
         // wraparound — the cap pins at usize::MAX.
-        let l = ResourceLimits::builder()
-            .max_memory_mib(usize::MAX)
-            .build();
+        let l = ResourceLimits::builder().max_memory_mib(usize::MAX).build();
         assert_eq!(l.max_memory_bytes, usize::MAX);
     }
 }

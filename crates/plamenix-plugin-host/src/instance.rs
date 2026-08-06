@@ -81,7 +81,11 @@ impl PluginInstance {
     /// `PluginMinimal::instantiate_async` returns. For overrides
     /// (manifest-driven), use [`PluginInstance::with_in_flight_limiter`].
     #[must_use]
-    pub fn new(plugin_id: impl Into<String>, store: Store<HostState>, bindings: PluginMinimal) -> Self {
+    pub fn new(
+        plugin_id: impl Into<String>,
+        store: Store<HostState>,
+        bindings: PluginMinimal,
+    ) -> Self {
         Self::with_in_flight_limiter(
             plugin_id,
             store,

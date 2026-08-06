@@ -186,19 +186,13 @@ pub fn format_csv(parts: &[ExportPart<'_>], delim: CsvDelimiter) -> String {
 pub fn format_json(parts: &[ExportPart<'_>]) -> String {
     if parts.len() == 1 {
         let p = &parts[0];
-        let rows: Vec<serde_json::Value> = p
-            .rows
-            .iter()
-            .map(|r| row_to_object(p.columns, r))
-            .collect();
+        let rows: Vec<serde_json::Value> =
+            p.rows.iter().map(|r| row_to_object(p.columns, r)).collect();
         return serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
     }
     let mut map = serde_json::Map::new();
     for (idx, part) in parts.iter().enumerate() {
-        let key = part
-            .label
-            .clone()
-            .unwrap_or_else(|| idx.to_string());
+        let key = part.label.clone().unwrap_or_else(|| idx.to_string());
         let rows: Vec<serde_json::Value> = part
             .rows
             .iter()
@@ -307,10 +301,7 @@ pub fn format_xml(parts: &[ExportPart<'_>]) -> String {
         out.push_str("<database>\n");
         for part in parts {
             let label = part.label.as_deref().unwrap_or("");
-            out.push_str(&format!(
-                "  <table name=\"{}\">\n",
-                escape_xml(label)
-            ));
+            out.push_str(&format!("  <table name=\"{}\">\n", escape_xml(label)));
             push_xml_rows(&mut out, part.columns, part.rows, "row", "    ");
             out.push_str("  </table>\n");
         }
@@ -379,7 +370,9 @@ mod tests {
     use super::*;
 
     fn col(name: &str) -> Column {
-        Column { name: name.to_string() }
+        Column {
+            name: name.to_string(),
+        }
     }
 
     #[test]
@@ -468,7 +461,9 @@ mod tests {
     fn sql_omits_ddl_when_include_ddl_false() {
         use plamenix_types::TableKind;
         let columns = vec![col("ID")];
-        let rows = vec![Row { cells: vec![ColumnValue::Integer(1)] }];
+        let rows = vec![Row {
+            cells: vec![ColumnValue::Integer(1)],
+        }];
         let table = TableInfo {
             name: "T".into(),
             kind: TableKind::Table,

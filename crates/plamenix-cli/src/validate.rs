@@ -119,7 +119,11 @@ pub fn render_report(report: &ValidationReport) -> String {
         entries = entries_display,
         req = report.required_count,
         opt = report.optional_count,
-        sub = if report.requires_subprocess { "yes" } else { "no" },
+        sub = if report.requires_subprocess {
+            "yes"
+        } else {
+            "no"
+        },
     )
 }
 
@@ -169,7 +173,11 @@ optional = [{opt_list}]
         let dir = tempdir().unwrap();
         let plug = dir.path().join("p");
         fs::create_dir(&plug).unwrap();
-        fs::write(plug.join("manifest.toml"), manifest_text("a.b", "0.1.0", &[], &[])).unwrap();
+        fs::write(
+            plug.join("manifest.toml"),
+            manifest_text("a.b", "0.1.0", &[], &[]),
+        )
+        .unwrap();
         let report = validate_target(&plug).unwrap();
         assert_eq!(report.plugin_id, "a.b");
         assert_eq!(report.plugin_version, "0.1.0");
@@ -186,7 +194,12 @@ optional = [{opt_list}]
         fs::create_dir(&plug).unwrap();
         fs::write(
             plug.join("manifest.toml"),
-            manifest_text("c.d", "0.1.0", &["db.read.any"], &["db.schema.list", "net.https"]),
+            manifest_text(
+                "c.d",
+                "0.1.0",
+                &["db.read.any"],
+                &["db.schema.list", "net.https"],
+            ),
         )
         .unwrap();
         let report = validate_target(&plug).unwrap();
@@ -199,7 +212,11 @@ optional = [{opt_list}]
         let dir = tempdir().unwrap();
         let plug = dir.path().join("p");
         fs::create_dir(&plug).unwrap();
-        fs::write(plug.join("manifest.toml"), manifest_text("arc.v", "9.9.9", &[], &[])).unwrap();
+        fs::write(
+            plug.join("manifest.toml"),
+            manifest_text("arc.v", "9.9.9", &[], &[]),
+        )
+        .unwrap();
         fs::write(plug.join("ui.mjs"), "// ui").unwrap();
         let plx = dir.path().join("out.plx");
         write_plx(&plug, &plx).unwrap();

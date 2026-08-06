@@ -94,10 +94,7 @@ impl NewPluginOptions {
 /// # Errors
 ///
 /// See [`ScaffoldError`].
-pub fn scaffold_new_plugin(
-    target: &Path,
-    options: &NewPluginOptions,
-) -> ScaffoldResult<()> {
+pub fn scaffold_new_plugin(target: &Path, options: &NewPluginOptions) -> ScaffoldResult<()> {
     ensure_safe_plugin_id(&options.plugin_id)?;
 
     if target.exists() {
@@ -119,7 +116,13 @@ pub fn scaffold_new_plugin(
 
     fs::write(
         target.join("manifest.toml"),
-        manifest_template(&options.plugin_id, &options.display_name, version, description, &author_line),
+        manifest_template(
+            &options.plugin_id,
+            &options.display_name,
+            version,
+            description,
+            &author_line,
+        ),
     )?;
     fs::write(
         target.join("Cargo.toml"),
@@ -157,7 +160,10 @@ pub fn ensure_safe_plugin_id(id: &str) -> ScaffoldResult<()> {
         return Err(ScaffoldError::InvalidId(id.to_string(), "id is empty"));
     }
     if id.len() > 128 {
-        return Err(ScaffoldError::InvalidId(id.to_string(), "id exceeds 128 chars"));
+        return Err(ScaffoldError::InvalidId(
+            id.to_string(),
+            "id exceeds 128 chars",
+        ));
     }
     let mut chars = id.chars();
     let Some(first) = chars.next() else {
@@ -297,10 +303,7 @@ fn package_json_template(pkg_name: &str, version: &str, description: &str) -> St
 fn readme_template(display_name: &str, plugin_id: &str) -> String {
     render_template(
         README_TMPL,
-        &[
-            ("DISPLAY_NAME", display_name),
-            ("PLUGIN_ID", plugin_id),
-        ],
+        &[("DISPLAY_NAME", display_name), ("PLUGIN_ID", plugin_id)],
     )
 }
 

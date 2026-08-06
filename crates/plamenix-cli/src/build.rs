@@ -138,11 +138,7 @@ pub fn build_plugin(plugin_dir: &Path, options: &BuildOptions) -> Result<BuildOu
         .clone()
         .unwrap_or_else(|| plugin_dir.to_path_buf());
     std::fs::create_dir_all(&output_dir)?;
-    let archive_name = format!(
-        "{}-{}.plx",
-        manifest.plugin.id,
-        manifest.plugin.version,
-    );
+    let archive_name = format!("{}-{}.plx", manifest.plugin.id, manifest.plugin.version,);
     let plx_path = output_dir.join(archive_name);
     write_plx(plugin_dir, &plx_path)?;
 
@@ -185,12 +181,7 @@ pub fn detect_package_manager(plugin_dir: &Path) -> PackageManager {
 fn run_cargo_build(plugin_dir: &Path) -> Result<(), BuildError> {
     let output = Command::new("cargo")
         .current_dir(plugin_dir)
-        .args([
-            "build",
-            "--target",
-            "wasm32-wasip2",
-            "--release",
-        ])
+        .args(["build", "--target", "wasm32-wasip2", "--release"])
         .output()?;
     if !output.status.success() {
         return Err(BuildError::CargoFailed {

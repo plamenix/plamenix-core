@@ -40,10 +40,7 @@ pub struct PackOutput {
 /// # Errors
 ///
 /// See [`PackError`].
-pub fn pack_plugin(
-    plugin_dir: &Path,
-    output_dir: Option<&Path>,
-) -> Result<PackOutput, PackError> {
+pub fn pack_plugin(plugin_dir: &Path, output_dir: Option<&Path>) -> Result<PackOutput, PackError> {
     if !plugin_dir.is_dir() {
         return Err(PackError::MissingPluginDir(plugin_dir.to_path_buf()));
     }
@@ -142,7 +139,11 @@ optional = []
         let dir = tempdir().unwrap();
         let plug = dir.path().join("p");
         fs::create_dir(&plug).unwrap();
-        fs::write(plug.join("manifest.toml"), manifest_text("rt.test", "5.6.7")).unwrap();
+        fs::write(
+            plug.join("manifest.toml"),
+            manifest_text("rt.test", "5.6.7"),
+        )
+        .unwrap();
         fs::write(plug.join("ui.mjs"), "// ui").unwrap();
         let out = pack_plugin(&plug, None).unwrap();
         let m = plamenix_plugin_host::peek_plx_manifest(&out.plx_path).unwrap();

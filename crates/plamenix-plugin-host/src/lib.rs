@@ -31,6 +31,7 @@ pub mod activator;
 pub mod bindings;
 pub mod capability;
 pub mod concurrency;
+pub mod dispatch;
 pub mod epoch;
 pub mod error;
 pub mod event_bus;
@@ -50,6 +51,7 @@ pub use activator::{
 };
 pub use capability::{LogicalDir, OsKeyring, Permission, PermissionGrant, PermissionSet};
 pub use concurrency::{CallPermit, InFlightAcquireError, InFlightLimiter, MAX_IN_FLIGHT_DEFAULT};
+pub use dispatch::{Delivery, DispatchOutcome, dispatch_event};
 pub use epoch::{
     BACKGROUND_DEADLINE_MS, CallClass, EPOCH_TICK_MS, EpochTicker, INTERACTIVE_DEADLINE_MS,
 };

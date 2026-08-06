@@ -172,3 +172,81 @@ async fn lock_store_returns_an_async_guard() {
     let guard = instance.lock_store().await;
     drop(guard);
 }
+
+/// The property the registry exists for: after `activate` returns, the
+/// plugin is still callable in the same store.
+///
+/// Before this was wired, the activator dropped its `Store` the moment
+/// activation finished. Every registry test above would still have
+/// passed against that — they check the map, not whether the thing in
+/// it can be called. Dispatching a second call is what distinguishes a
+/// live instance from a parked handle.
+#[tokio::test]
+async fn a_registered_instance_is_still_callable_after_activation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_hello_plugin(dir.path());
+
+    let host = PluginHost::new().expect("host");
+    let version = Version::parse("1.0.0-beta").expect("version");
+    let staged = load(&host, &version, dir.path()).expect("load");
+    let registry = InstanceRegistry::new();
+
+    let outcome = activate_into_registry(
+        &host,
+        HostState::new(&staged.manifest.plugin.id, "1.0.0-beta"),
+        &staged,
+        &registry,
+    )
+    .await
+    .expect("activate");
+    assert!(matches!(outcome, ActivationOutcome::Ok));
+
+    let instance = registry
+        .get(&staged.manifest.plugin.id)
+        .expect("registry lock")
+        .expect("instance registered");
+
+    // Reach back into the same store the activation ran in and dispatch
+    // another call. This is exactly what event dispatch will do.
+    let mut store = instance.lock_store().await;
+    instance
+        .bindings()
+        .plamenix_plugin_plugin()
+        .call_handle_event(&mut *store, "plamenix.test", "{}")
+        .await
+        .expect("the plugin's store must still be usable after activation");
+}
+
+/// Dropping the registry releases the stores it holds.
+///
+/// The isolation property the supervisor and the resource limits both
+/// assume: nothing survives the registry.
+#[tokio::test]
+async fn dropping_the_registry_releases_its_instances() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_hello_plugin(dir.path());
+
+    let host = PluginHost::new().expect("host");
+    let version = Version::parse("1.0.0-beta").expect("version");
+    let staged = load(&host, &version, dir.path()).expect("load");
+
+    let instance = {
+        let registry = InstanceRegistry::new();
+        activate_into_registry(
+            &host,
+            HostState::new(&staged.manifest.plugin.id, "1.0.0-beta"),
+            &staged,
+            &registry,
+        )
+        .await
+        .expect("activate");
+        registry
+            .get(&staged.manifest.plugin.id)
+            .expect("registry lock")
+            .expect("instance registered")
+    };
+
+    // The registry is gone; the only remaining reference is this one,
+    // so dropping it drops the store too.
+    assert_eq!(std::sync::Arc::strong_count(&instance), 1);
+}

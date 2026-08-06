@@ -45,6 +45,8 @@ fn live_config() -> Option<ConnectionConfig> {
             encryption_key: None,
             fbclient_path: Some(fbclient_path),
             encryption_required: false,
+            charset: None,
+            embedded: false,
         })
 }
 

@@ -389,22 +389,29 @@ fn run_statement(
     sql: &str,
     bin: &mut BlobBin,
 ) -> Result<QueryResult, DbError> {
-    // Heuristic for SELECT vs DML. Real prepared-statement metadata would
-    // be more robust; this matches the MVP's behaviour and is good enough
-    // until prepared-statement plumbing lands.
-    let trimmed = sql.trim_start();
-    let is_select = trimmed.split_whitespace().next().is_some_and(|word| {
-        word.eq_ignore_ascii_case("SELECT") || word.eq_ignore_ascii_case("WITH")
-    });
-
-    if !is_select {
-        let affected = conn.execute(sql, ()).map_err(DbError::from)?;
-        return Ok(QueryResult::Affected {
-            rows: u64::try_from(affected).unwrap_or(0),
-        });
-    }
-
-    let rows: Vec<RsfbRow> = conn.query(sql, ()).map_err(DbError::from)?;
+    // Routing shares `statement_shape` with the command layer. There used
+    // to be a second, narrower copy of the test here that omitted
+    // EXECUTE entirely, so an EXECUTE BLOCK went down the non-cursor
+    // path and its rows were replaced by an affected-row count. Real
+    // prepared-statement metadata would beat any keyword test; until
+    // that plumbing lands, one classifier beats two that disagree.
+    let rows: Vec<RsfbRow> = match crate::statement_shape(sql) {
+        crate::StatementShape::NoResultSet => {
+            let affected = conn.execute(sql, ()).map_err(DbError::from)?;
+            return Ok(QueryResult::Affected {
+                rows: u64::try_from(affected).unwrap_or(0),
+            });
+        }
+        crate::StatementShape::OutputParams => {
+            // EXECUTE PROCEDURE returns its output parameters as a
+            // single row through `isc_dsql_execute2`, with no cursor to
+            // fetch — asking for one fails with "Cursor is not open".
+            // `Row` implements `FromRow`, so the columns stay dynamic.
+            let row: RsfbRow = conn.execute_returnable(sql, ()).map_err(DbError::from)?;
+            vec![row]
+        }
+        crate::StatementShape::Cursor => conn.query(sql, ()).map_err(DbError::from)?,
+    };
     let columns = rows
         .first()
         .map(|row| {

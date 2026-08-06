@@ -96,6 +96,14 @@ struct Session {
     work: SharedConn,
     meta: SharedConn,
     tx: Arc<Mutex<TxRuntime>>,
+    /// Engine major version, probed once at attach.
+    ///
+    /// Plamenix supports Firebird 2.5 through 5.0 and two monitoring
+    /// columns only exist from 3.0 onward, so a query built for the
+    /// newest engine fails outright on the oldest. Probed rather than
+    /// inferred: the client library version says nothing about what the
+    /// server it connected to supports.
+    engine_major: u32,
 }
 
 /// Transaction settings for the metadata attachment.
@@ -269,7 +277,7 @@ impl DbDriver for RsfbDriver {
         // one read-only for Plamenix's own metadata reads. Opening both
         // up front keeps the read path available even while the work
         // attachment sits inside a long manual transaction.
-        let (conn, meta) = {
+        let (conn, meta, engine_major) = {
             let config = config.clone();
             let mode = mode.clone();
             tokio::task::spawn_blocking(move || -> Result<_, DbError> {
@@ -281,8 +289,11 @@ impl DbDriver for RsfbDriver {
                         locking: TxLocking::NoWait,
                     }),
                 )?;
-                let meta = build_connection(&config, &mode, meta_tx_config())?;
-                Ok((work, meta))
+                let mut meta = build_connection(&config, &mode, meta_tx_config())?;
+                // Probed on the metadata attachment, before any user
+                // statement can be in flight.
+                let engine_major = probe_engine_major(&mut meta);
+                Ok((work, meta, engine_major))
             })
             .await??
         };
@@ -299,6 +310,7 @@ impl DbDriver for RsfbDriver {
             work: Arc::new(Mutex::new(conn)),
             meta: Arc::new(Mutex::new(meta)),
             tx: Arc::new(Mutex::new(TxRuntime::new())),
+            engine_major,
         };
 
         self.sessions.lock().await.insert(id, state);
@@ -530,10 +542,12 @@ impl DbDriver for RsfbDriver {
 
     #[tracing::instrument(name = "db.crypt_state", skip(self), fields(session = %session.0))]
     async fn crypt_state(&self, session: SessionId) -> Result<CryptState, DbError> {
-        let shared = self.meta_conn(session).await?;
+        let state = self.session(session).await?;
+        let engine_major = state.engine_major;
+        let shared = state.meta;
         tokio::task::spawn_blocking(move || {
             let mut guard = shared.blocking_lock();
-            run_crypt_state(&mut guard)
+            run_crypt_state(&mut guard, engine_major)
         })
         .await?
     }
@@ -558,10 +572,12 @@ impl DbDriver for RsfbDriver {
         fields(session = %session.0),
     )]
     async fn database_stats(&self, session: SessionId) -> Result<DatabaseStats, DbError> {
-        let shared = self.meta_conn(session).await?;
+        let state = self.session(session).await?;
+        let engine_major = state.engine_major;
+        let shared = state.meta;
         tokio::task::spawn_blocking(move || {
             let mut guard = shared.blocking_lock();
-            run_database_stats(&mut guard)
+            run_database_stats(&mut guard, engine_major)
         })
         .await?
     }
@@ -799,12 +815,35 @@ fn run_statement(
     })
 }
 
-fn run_crypt_state(conn: &mut SimpleConnection) -> Result<CryptState, DbError> {
+fn run_crypt_state(conn: &mut SimpleConnection, engine_major: u32) -> Result<CryptState, DbError> {
+    // MON$CRYPT_STATE arrived with Firebird 3.0, alongside database
+    // encryption itself. On 2.5 the column is not merely absent — the
+    // engine has no native encryption at all, so unencrypted is the
+    // factual answer rather than a fallback, and `encryption_required`
+    // correctly refuses such a connection.
+    if engine_major < 3 {
+        return Ok(CryptState::Unencrypted);
+    }
     let rows: Vec<(i64,)> = conn
         .query("SELECT MON$CRYPT_STATE FROM MON$DATABASE", ())
         .map_err(DbError::from)?;
     let value = rows.into_iter().next().map_or(0, |(v,)| v);
     CryptState::from_raw(value)
+}
+
+/// Reads the engine's major version.
+///
+/// Falls back to 0 rather than failing the attach: an unreadable
+/// version should degrade to the conservative query shape, not stop the
+/// user connecting.
+fn probe_engine_major(conn: &mut SimpleConnection) -> u32 {
+    run_ping(conn).map_or(0, |version| {
+        version
+            .split('.')
+            .next()
+            .and_then(|major| major.parse().ok())
+            .unwrap_or(0)
+    })
 }
 
 fn run_ping(conn: &mut SimpleConnection) -> Result<String, DbError> {
@@ -1269,8 +1308,11 @@ fn row_text(row: &RsfbRow, idx: usize) -> String {
     }
 }
 
-fn run_database_stats(conn: &mut SimpleConnection) -> Result<DatabaseStats, DbError> {
-    let database = run_mon_database(conn)?;
+fn run_database_stats(
+    conn: &mut SimpleConnection,
+    engine_major: u32,
+) -> Result<DatabaseStats, DbError> {
+    let database = run_mon_database(conn, engine_major)?;
     let attachments = run_mon_attachments(conn).unwrap_or_default();
     let statements = run_mon_statements(conn).unwrap_or_default();
     Ok(DatabaseStats {
@@ -1280,10 +1322,22 @@ fn run_database_stats(conn: &mut SimpleConnection) -> Result<DatabaseStats, DbEr
     })
 }
 
-fn run_mon_database(conn: &mut SimpleConnection) -> Result<MonDatabase, DbError> {
+fn run_mon_database(
+    conn: &mut SimpleConnection,
+    engine_major: u32,
+) -> Result<MonDatabase, DbError> {
+    // MON$OWNER arrived with Firebird 3.0. Selecting it on 2.5 fails the
+    // whole query with "Column unknown", taking the entire dashboard
+    // down rather than one field, so the column is substituted out.
+    let owner = if engine_major >= 3 {
+        "COALESCE(TRIM(d.MON$OWNER), '')"
+    } else {
+        "CAST('' AS VARCHAR(64))"
+    };
     let rows: Vec<RsfbRow> = conn
         .query(
-            "SELECT \
+            &format!(
+                "SELECT \
              TRIM(d.MON$DATABASE_NAME), \
              d.MON$PAGE_SIZE, d.MON$PAGES, \
              d.MON$OLDEST_TRANSACTION, d.MON$OLDEST_ACTIVE, d.MON$OLDEST_SNAPSHOT, \
@@ -1292,13 +1346,14 @@ fn run_mon_database(conn: &mut SimpleConnection) -> Result<MonDatabase, DbError>
              CAST(d.MON$CREATION_DATE AS VARCHAR(64)), \
              COALESCE(d.MON$BACKUP_STATE, 0), \
              COALESCE(d.MON$SHUTDOWN_MODE, 0), \
-             COALESCE(TRIM(d.MON$OWNER), ''), \
+             {owner}, \
              d.MON$ODS_MAJOR, d.MON$ODS_MINOR, \
              CAST(rdb$get_context('SYSTEM', 'ENGINE_VERSION') AS VARCHAR(64)), \
              COALESCE(i.MON$PAGE_READS, 0), COALESCE(i.MON$PAGE_WRITES, 0), \
              COALESCE(i.MON$PAGE_FETCHES, 0), COALESCE(i.MON$PAGE_MARKS, 0) \
              FROM MON$DATABASE d \
-             LEFT JOIN MON$IO_STATS i ON i.MON$STAT_ID = d.MON$STAT_ID",
+             LEFT JOIN MON$IO_STATS i ON i.MON$STAT_ID = d.MON$STAT_ID"
+            ),
             (),
         )
         .map_err(DbError::from)?;

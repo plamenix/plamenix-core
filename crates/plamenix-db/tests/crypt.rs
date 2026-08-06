@@ -25,6 +25,7 @@ fn pure_rust_config(encryption_required: bool) -> ConnectionConfig {
         fbclient_path: None,
         encryption_required,
         charset: None,
+        embedded: false,
     }
 }
 

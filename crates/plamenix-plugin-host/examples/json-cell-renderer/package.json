@@ -1,0 +1,21 @@
+{
+  "name": "@plamenix/plugin-json-cell-renderer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "(MIT OR Apache-2.0)",
+  "scripts": {
+    "build": "vite build"
+  },
+  "devDependencies": {
+    "@plamenix/ui": "link:../../../../../../plamenix-ui",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^6",
+    "vite": "^8"
+  },
+  "peerDependencies": {
+    "react": "^19",
+    "react-dom": "^19"
+  }
+}

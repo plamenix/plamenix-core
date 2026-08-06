@@ -72,4 +72,23 @@ pub enum PluginError {
     /// IO error reading bundle files.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// Supervisor was asked about a plugin id that was never
+    /// registered (or has been forgotten).
+    #[error("plugin not registered with supervisor: {0}")]
+    PluginNotFound(String),
+
+    /// I7.15 — `.plx` archive signature is malformed (bad JSON,
+    /// missing fields, unsupported algorithm).
+    #[error("plugin signature malformed: {0}")]
+    SignatureMalformed(String),
+
+    /// I7.16 — `.plx` archive carries no `signature.json` member.
+    #[error("plugin archive is unsigned")]
+    SignatureMissing,
+
+    /// I7.16 — signature failed cryptographic verification (tampered
+    /// archive OR wrong public key).
+    #[error("plugin signature failed verification: {0}")]
+    SignatureInvalid(String),
 }

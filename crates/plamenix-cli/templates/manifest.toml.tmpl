@@ -1,0 +1,19 @@
+[plugin]
+id = "{{PLUGIN_ID}}"
+name = "{{DISPLAY_NAME}}"
+version = "{{VERSION}}"
+description = "{{DESCRIPTION}}"
+{{AUTHOR_LINE}}plamenix_min_version = ">=1.0.0-beta"
+plugin_api = "1.0"
+
+[entry_points]
+wasm = "plugin.wasm"
+ui = "ui.mjs"
+
+[runtime]
+restart_policy = "transient"
+requires_subprocess = false
+
+[permissions]
+required = []
+optional = []

@@ -119,6 +119,12 @@ pub struct ConnectionConfig {
     /// unencrypted environments when the user expects an encrypted one.
     #[serde(default)]
     pub encryption_required: bool,
+    /// If `true`, attach via Firebird's embedded engine — the
+    /// `database` field is treated as a local file path; `host` and
+    /// `port` are ignored. Exclusive access only (no other process may
+    /// be holding the file open).
+    #[serde(default)]
+    pub embedded: bool,
 }
 
 /// Catalogue describing the schema visible to a Firebird session.

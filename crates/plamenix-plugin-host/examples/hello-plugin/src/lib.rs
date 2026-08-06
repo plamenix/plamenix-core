@@ -6,8 +6,7 @@
 
 wit_bindgen::generate!({
     path: "wit",
-    world: "plamenix-plugin",
-    generate_all,
+    world: "plugin-minimal",
 });
 
 use crate::exports::plamenix::plugin::plugin::{Activation, Guest};
@@ -22,6 +21,20 @@ impl Guest for HelloPlugin {
         message.push_str(&version);
         log(LogLevel::Info, &message);
         Activation::Ok
+    }
+
+    fn deactivate() {
+        log(LogLevel::Info, "hello plugin deactivating");
+    }
+
+    fn handle_event(topic: String, payload: String) {
+        // Logs both topic and payload — sufficient for the I6.2
+        // integration test (host's log sink asserts the line).
+        let mut message = String::from("hello plugin received event: ");
+        message.push_str(&topic);
+        message.push_str(" payload=");
+        message.push_str(&payload);
+        log(LogLevel::Info, &message);
     }
 }
 

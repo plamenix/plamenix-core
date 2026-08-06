@@ -273,6 +273,21 @@ fn build_native(config: &ConnectionConfig) -> Result<SimpleConnection, DbError> 
         ));
     };
     let path_str = path.to_string_lossy().into_owned();
+    if config.embedded {
+        // Embedded Firebird authenticates locally — no password
+        // needed. The user field is honored so MON$ATTACHMENTS still
+        // records who connected.
+        let mut builder = rsfbclient::builder_native()
+            .with_dyn_load(path_str)
+            .with_embedded();
+        builder.db_name(&config.database);
+        builder.user(&config.user);
+        apply_charset_embedded(&mut builder, config)?;
+        return builder
+            .connect()
+            .map(SimpleConnection::from)
+            .map_err(|err| DbError::Connect(err.to_string()));
+    }
     let mut builder = rsfbclient::builder_native()
         .with_dyn_load(path_str)
         .with_remote();
@@ -287,6 +302,18 @@ fn build_native(config: &ConnectionConfig) -> Result<SimpleConnection, DbError> 
         .connect()
         .map(SimpleConnection::from)
         .map_err(|err| DbError::Connect(err.to_string()))
+}
+
+#[cfg(feature = "native")]
+fn apply_charset_embedded<A, B>(
+    builder: &mut rsfbclient::NativeConnectionBuilder<A, B>,
+    config: &ConnectionConfig,
+) -> Result<(), DbError>
+where
+    A: rsfbclient::ConfiguredLinkage,
+    B: rsfbclient::ConfiguredConnType,
+{
+    apply_charset(builder, config)
 }
 
 #[cfg(feature = "native")]
@@ -323,6 +350,12 @@ fn build_native(_config: &ConnectionConfig) -> Result<SimpleConnection, DbError>
 #[cfg(feature = "pure-rust")]
 fn build_pure_rust(config: &ConnectionConfig) -> Result<SimpleConnection, DbError> {
     use std::str::FromStr;
+    if config.embedded {
+        return Err(DbError::Connect(
+            "embedded mode is unsupported on the pure-rust driver — switch to native mode in the connection form"
+                .into(),
+        ));
+    }
     let mut builder = rsfbclient::builder_pure_rust();
     builder
         .host(&config.host)

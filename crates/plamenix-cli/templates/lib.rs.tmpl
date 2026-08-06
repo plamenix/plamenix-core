@@ -1,0 +1,16 @@
+//! Plamenix plugin entry point.
+//!
+//! Compiles to `wasm32-wasip2` and exports the `plamenix:plugin`
+//! component world. The host loads the resulting `.wasm`, registers
+//! capabilities + contributions from `manifest.toml`, then calls
+//! `activate()` once per session.
+
+// TODO(author): replace this scaffold with real plugin logic. The
+// `plamenix-plugin-sdk` crate (path or crates.io once published)
+// exposes the `Plugin` trait + `host::log!` macro.
+
+#[allow(dead_code)]
+fn activate() -> Result<(), &'static str> {
+    // Example: `plamenix_plugin_sdk::host::log!(Info, "hello from plugin");`
+    Ok(())
+}

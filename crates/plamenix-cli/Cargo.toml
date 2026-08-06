@@ -1,0 +1,29 @@
+[package]
+name = "plamenix-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Command-line tooling for authoring Plamenix plugins (scaffold, build, pack, validate)."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "plamenix"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+thiserror.workspace = true
+plamenix-plugin-host.workspace = true
+ed25519-dalek.workspace = true
+rand.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

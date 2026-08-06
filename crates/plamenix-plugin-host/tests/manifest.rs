@@ -36,17 +36,17 @@ fn parses_valid_manifest() {
     assert!(
         manifest
             .permissions
-            .required
-            .contains(&Permission::DbReadAny)
+            .required_caps()
+            .any(|p| matches!(p, Permission::DbReadAny))
     );
     assert!(
         manifest
             .permissions
-            .required
-            .contains(&Permission::ExportFormat)
+            .required_caps()
+            .any(|p| matches!(p, Permission::ExportFormat))
     );
     assert!(matches!(
-        manifest.permissions.optional.first(),
+        manifest.permissions.optional.first().map(|g| &g.capability),
         Some(Permission::NetHttpsHost(host)) if host == "api.example.com"
     ));
 }
@@ -114,6 +114,89 @@ fn parses_scoped_capabilities() {
 }
 
 #[test]
+fn parses_detailed_permission_grant_with_purpose() {
+    let text = r#"
+[plugin]
+id = "org.example.detailed"
+name = "Detailed"
+version = "1.0.0"
+plamenix_min_version = ">=1.0.0-beta"
+plugin_api = "1.0"
+
+[permissions]
+required = [
+  { capability = "db.schema.list", purpose = "List tables to choose from" },
+  { capability = "fs.write.dir.plugin-data", purpose = "Cache export progress" },
+]
+
+[entry_points]
+ui = "ui.mjs"
+"#;
+    let manifest = Manifest::parse(text).expect("valid detailed grants");
+    assert_eq!(manifest.permissions.required.len(), 2);
+    let first = &manifest.permissions.required[0];
+    assert_eq!(first.capability, Permission::DbSchemaList);
+    assert_eq!(first.purpose.as_deref(), Some("List tables to choose from"));
+    let second = &manifest.permissions.required[1];
+    assert_eq!(
+        second.capability,
+        Permission::FsWriteDir(LogicalDir::PluginData)
+    );
+    assert_eq!(second.purpose.as_deref(), Some("Cache export progress"));
+}
+
+#[test]
+fn parses_mixed_plain_and_detailed_grants_in_same_list() {
+    let text = r#"
+[plugin]
+id = "org.example.mixed"
+name = "Mixed"
+version = "1.0.0"
+plamenix_min_version = ">=1.0.0-beta"
+plugin_api = "1.0"
+
+[permissions]
+required = [
+  "db.schema.list",
+  { capability = "fs.write.dir.plugin-data", purpose = "Cache export progress" },
+]
+
+[entry_points]
+ui = "ui.mjs"
+"#;
+    let manifest = Manifest::parse(text).expect("valid mixed grants");
+    assert_eq!(manifest.permissions.required.len(), 2);
+    // Plain-string form leaves purpose absent.
+    assert_eq!(manifest.permissions.required[0].capability, Permission::DbSchemaList);
+    assert!(manifest.permissions.required[0].purpose.is_none());
+    // Detailed-object form attaches purpose.
+    assert!(manifest.permissions.required[1].purpose.is_some());
+}
+
+#[test]
+fn empty_purpose_string_treated_as_absent() {
+    let text = r#"
+[plugin]
+id = "org.example.empty"
+name = "Empty"
+version = "1.0.0"
+plamenix_min_version = ">=1.0.0-beta"
+plugin_api = "1.0"
+
+[permissions]
+required = [{ capability = "db.schema.list", purpose = "" }]
+
+[entry_points]
+ui = "ui.mjs"
+"#;
+    let manifest = Manifest::parse(text).expect("valid manifest");
+    // Empty-string purpose collapses to None — matches the
+    // "marketplace requires non-empty" rule that I7's validator will
+    // enforce (rejecting empty + missing equivalently).
+    assert!(manifest.permissions.required[0].purpose.is_none());
+}
+
+#[test]
 fn permission_set_grants_lookup_covers_both_buckets() {
     let manifest = Manifest::parse(VALID_MANIFEST).unwrap();
     assert!(manifest.permissions.grants(&Permission::DbReadAny));
@@ -177,4 +260,73 @@ ui = "ui.mjs"
         .expect("ui-only plugin should load");
     assert_eq!(staged.manifest.plugin.id, "ui.only");
     assert!(staged.component.is_none());
+}
+
+#[test]
+fn manifest_parses_event_subscriptions() {
+    // I6.2 — manifests with `[contributions]
+    // event_subscriptions = [...]` get parsed + validated. Valid
+    // pattern grammar: slash-segmented with `*` / `**` wildcards.
+    let manifest = r#"
+[plugin]
+id = "com.example.audit"
+name = "Audit"
+version = "1.0.0"
+plamenix_min_version = ">=1.0.0-beta"
+plugin_api = "1.0"
+
+[entry_points]
+ui = "ui.mjs"
+
+[contributions]
+event_subscriptions = ["query/executed", "connection/**", "tab/*"]
+"#;
+    let parsed = Manifest::parse(manifest).expect("valid manifest");
+    assert_eq!(
+        parsed.contributions.event_subscriptions,
+        vec!["query/executed", "connection/**", "tab/*"],
+    );
+}
+
+#[test]
+fn manifest_defaults_event_subscriptions_to_empty_when_absent() {
+    let manifest = r#"
+[plugin]
+id = "com.example.silent"
+name = "Silent"
+version = "1.0.0"
+plamenix_min_version = ">=1.0.0-beta"
+plugin_api = "1.0"
+
+[entry_points]
+ui = "ui.mjs"
+"#;
+    let parsed = Manifest::parse(manifest).expect("valid manifest");
+    assert!(parsed.contributions.event_subscriptions.is_empty());
+}
+
+#[test]
+fn manifest_rejects_empty_event_subscription_pattern() {
+    // I6.2 — empty pattern string fails parse-time validation
+    // (fail-loud beats failing silently at activation).
+    let manifest = r#"
+[plugin]
+id = "com.example.broken"
+name = "Broken"
+version = "1.0.0"
+plamenix_min_version = ">=1.0.0-beta"
+plugin_api = "1.0"
+
+[entry_points]
+ui = "ui.mjs"
+
+[contributions]
+event_subscriptions = [""]
+"#;
+    let err = Manifest::parse(manifest).expect_err("empty pattern must error");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("event_subscriptions") && msg.contains("non-empty"),
+        "expected event_subscriptions validation error, got: {msg}",
+    );
 }

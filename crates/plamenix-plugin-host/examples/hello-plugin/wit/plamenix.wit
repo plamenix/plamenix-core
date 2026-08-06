@@ -1,12 +1,24 @@
 // Plamenix plugin interface, version 1.0.
 //
-// Plugins are WASM Component Model components that target this world.
-// The host implements the imported `host` interface; plugins export
-// the `plugin` interface. Breaking changes to this WIT package mint a
-// new package version (e.g. `plamenix:plugin@2.0.0`); the host can
-// load plugins targeting multiple versions side by side.
+// Plugins are WASM Component Model components that target one of the
+// worlds declared below. Each world bundles a capability tier: a
+// plugin only sees host imports its declared world exposes (Object
+// Capability Model by construction).
+//
+// Breaking changes to this WIT package mint a new package version
+// (e.g. `plamenix:plugin@2.0.0`); the host can load plugins targeting
+// multiple versions side by side. Adding a new world or extending an
+// existing world with NEW imports is SemVer-minor; changing the shape
+// of an existing import is SemVer-major.
+//
+// Design source: PLUGIN_ARCHITECTURE.md §4 (worlds) + §5 (capability
+// grammar).
 
 package plamenix:plugin@1.0.0;
+
+// ─────────────────────────────────────────────────────────────────────
+// Always-available interfaces (every world imports these)
+// ─────────────────────────────────────────────────────────────────────
 
 interface host {
     /// Severity levels for plugin-emitted log lines.
@@ -23,6 +35,11 @@ interface host {
 
     /// Returns the host's SemVer string (e.g. "1.0.0-beta").
     host-version: func() -> string;
+
+    /// Returns the edition string: "desktop" or "web". Plugins may
+    /// branch on this when they target both editions and need
+    /// edition-specific behaviour at runtime.
+    edition: func() -> string;
 }
 
 interface plugin {
@@ -34,12 +51,365 @@ interface plugin {
 
     /// Called once after the plugin component instantiates. The plugin
     /// uses this opportunity to register contribution points with the
-    /// host (a future revision will expose richer register* host
-    /// functions for this).
+    /// host (richer register* host functions land in later sections).
     activate: func() -> activation;
+
+    /// Called once before the plugin component is dropped. Plugins use
+    /// this opportunity to release resources, flush state, and
+    /// unregister contribution points. The host enforces a 1s budget;
+    /// blocking longer drops the plugin without further notice.
+    deactivate: func();
+
+    /// Dispatch entry for events the plugin subscribed to via
+    /// `[[contributions.event_subscriptions]]` in its manifest. The
+    /// host invokes this once per matching event with the topic and a
+    /// payload string (typically JSON; the contract treats it as
+    /// opaque). Plugins MUST NOT block the host: handle-event runs
+    /// inside the same plugin store as other invocations and
+    /// long-running work should be deferred to a host-spawned task.
+    /// The host enforces the same 100ms interactive deadline as
+    /// regular calls (see I8 supervisor).
+    ///
+    /// Plugins that register no subscriptions ship an empty body that
+    /// returns immediately; the export is mandatory at the WIT level
+    /// so a plugin's component shape stays stable regardless of which
+    /// subscriptions it registers at install time.
+    handle-event: func(topic: string, payload: string);
 }
 
-world plamenix-plugin {
+// ─────────────────────────────────────────────────────────────────────
+// Capability: read-only database access
+// ─────────────────────────────────────────────────────────────────────
+
+interface db {
+    /// Failure modes returned by any `db` import.
+    variant db-error {
+        /// No active session for the supplied identifier.
+        no-session,
+        /// Session identifier syntactically invalid.
+        invalid-session(string),
+        /// Plugin lacks the capability for this operation.
+        capability-denied(string),
+        /// Underlying driver returned an error.
+        execution(string),
+    }
+
+    /// Lightweight column descriptor returned with each query result.
+    record column-info {
+        name: string,
+        sql-type: string,
+        nullable: bool,
+    }
+
+    /// Tagged-union column value matching `plamenix-types::ColumnValue`.
+    /// Blob bodies are NOT inlined; plugins fetch via a future
+    /// `fetch-blob` capability once it lands.
+    variant column-value {
+        null,
+        text(string),
+        integer(s64),
+        float(f64),
+        boolean(bool),
+        blob-ref(blob-ref),
+    }
+
+    record blob-ref {
+        id: string,
+        size: u64,
+        peek-hex: string,
+    }
+
+    record row {
+        cells: list<column-value>,
+    }
+
+    /// Result envelope: rows + columns + a truncated marker when the
+    /// host applied a row cap.
+    record query-result {
+        columns: list<column-info>,
+        rows: list<row>,
+        truncated: bool,
+    }
+
+    /// Top-level catalogue entry; full schema-describe lives in
+    /// `describe-schema` which returns the union of these.
+    record table-info {
+        name: string,
+        kind: string,           // "table" | "view"
+    }
+
+    record schema {
+        tables: list<table-info>,
+        // procedures, triggers, generators, domains added as their
+        // own interfaces extend the read surface; kept minimal here.
+    }
+
+    /// Read-only catalogue introspection. Capability: `db:schema.list`
+    /// + `db:schema.describe`.
+    describe-schema: func(session-id: string) -> result<schema, db-error>;
+
+    /// Returns the current foreground session id if a tab is active;
+    /// none when the user is on the connect screen. Capability:
+    /// `db.session:context.read`.
+    current-session: func() -> option<string>;
+
+    /// Read-only execution. Plugin SQL is wrapped in a read-only
+    /// transaction by the host. Capability: `db:query.read`.
+    query-read: func(session-id: string, sql: string) -> result<query-result, db-error>;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Capability: read+write database access
+// ─────────────────────────────────────────────────────────────────────
+
+interface db-write {
+    use db.{db-error, query-result};
+
+    /// Affected-rows envelope for statements that do not return rows.
+    record exec-result {
+        affected-rows: u64,
+    }
+
+    /// Either-rows-or-affected envelope, matching the existing
+    /// `StatementOutcome` shape.
+    variant statement-outcome {
+        rows(query-result),
+        affected(exec-result),
+    }
+
+    /// Run a single statement. Host applies capability check + invokes
+    /// the registered interceptor chain (`query.executing`) before
+    /// execution; an interceptor may cancel.
+    /// Capability: `db.write:execute`.
+    execute: func(session-id: string, sql: string) -> result<statement-outcome, db-error>;
+
+    /// Transaction control. Capability: `db.write:tx.*`.
+    tx-begin:    func(session-id: string) -> result<_, db-error>;
+    tx-commit:   func(session-id: string) -> result<_, db-error>;
+    tx-rollback: func(session-id: string) -> result<_, db-error>;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Capability: filesystem (scoped to preopened plugin-data dir)
+// ─────────────────────────────────────────────────────────────────────
+
+interface fs {
+    /// Failure modes for filesystem operations. All paths are relative
+    /// to the plugin's preopened data directory; absolute paths and
+    /// `..` traversal are rejected at the WASI layer.
+    variant fs-error {
+        not-found,
+        permission-denied(string),
+        io-error(string),
+        invalid-path(string),
+    }
+
+    /// Read all bytes from a file. Capability: `fs:read:plugin-data`.
+    read-file: func(path: string) -> result<list<u8>, fs-error>;
+
+    /// Write (creating or truncating) a file with the supplied bytes.
+    /// Capability: `fs:write:plugin-data`.
+    write-file: func(path: string, contents: list<u8>) -> result<_, fs-error>;
+
+    /// List entries in a directory (filenames only, non-recursive).
+    /// Capability: `fs:read:plugin-data`.
+    list-dir: func(path: string) -> result<list<string>, fs-error>;
+
+    /// Remove a file. Capability: `fs:write:plugin-data`.
+    remove-file: func(path: string) -> result<_, fs-error>;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Capability: outbound HTTP (allow-list enforced by host)
+// ─────────────────────────────────────────────────────────────────────
+
+interface net {
+    variant net-error {
+        /// Host not on the plugin's manifest allow-list.
+        not-allowed(string),
+        /// Underlying transport failure (TLS, DNS, refused, etc.).
+        transport(string),
+        /// Wall-clock deadline exceeded.
+        timeout,
+        /// Request rate quota exceeded.
+        rate-limited,
+    }
+
+    record http-header {
+        name:  string,
+        value: string,
+    }
+
+    record http-request {
+        method:  string,        // "GET" | "POST" | …
+        url:     string,
+        headers: list<http-header>,
+        body:    option<list<u8>>,
+    }
+
+    record http-response {
+        status:  u16,
+        headers: list<http-header>,
+        body:    list<u8>,
+    }
+
+    /// Issue an HTTPS request. The host validates the URL host against
+    /// the plugin's `net:fetch.https:<host>:<port>` capability set and
+    /// rejects mismatches before any socket opens.
+    fetch: func(req: http-request) -> result<http-response, net-error>;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Capability: event bus (publish + subscribe)
+// ─────────────────────────────────────────────────────────────────────
+
+interface event-bus {
+    /// Emit an event on a plugin-owned topic (`<plugin-id>:…`). Host
+    /// rejects emits to topics outside the plugin's namespace unless
+    /// the plugin holds `event:publish:<channel>` capability.
+    emit: func(topic: string, payload: string);
+
+    // Subscriptions are declared via the plugin's manifest
+    // (`[[contributions.event_subscriptions]]`) and dispatched into
+    // the plugin's exported `handle-event` (defined in `plugin`
+    // interface extension landing in I6).
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Capability: per-plugin key-value settings
+// ─────────────────────────────────────────────────────────────────────
+
+interface settings {
+    /// Read a setting. Scope is implicitly the calling plugin; no
+    /// cross-plugin reads possible. Capability: `settings:read`.
+    get: func(key: string) -> option<string>;
+
+    /// Write a setting in the calling plugin's scope. Capability:
+    /// `settings:write`.
+    set: func(key: string, value: string);
+
+    /// Remove a setting. Capability: `settings:write`.
+    remove: func(key: string);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Capability: command invocation
+// ─────────────────────────────────────────────────────────────────────
+
+interface command {
+    variant command-error {
+        not-found(string),
+        capability-denied(string),
+        invocation(string),
+    }
+
+    /// Invoke a command by id. JSON-encoded args + return for v1; a
+    /// typed surface may follow once concrete plugins exercise it.
+    /// Capability: `command:invoke`.
+    invoke: func(command-id: string, args-json: string) -> result<string, command-error>;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Capability: clipboard (D + W; semantics differ at host layer)
+// ─────────────────────────────────────────────────────────────────────
+
+interface clipboard {
+    /// Read the system clipboard. Always prompts on first use.
+    /// Capability: `clipboard:read`.
+    read: func() -> option<string>;
+
+    /// Write to the system clipboard. Capability: `clipboard:write`.
+    write: func(text: string);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Capability: OS notifications (desktop-only)
+// ─────────────────────────────────────────────────────────────────────
+
+interface notify {
+    /// Display an OS notification. Capability: `notify:display`.
+    display: func(title: string, body: string);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Capability: OS keyring (desktop-only)
+// ─────────────────────────────────────────────────────────────────────
+
+interface keyring {
+    variant keyring-error {
+        not-found,
+        access-denied(string),
+        backend(string),
+    }
+
+    /// Read a secret from the OS keyring. Service name is namespaced
+    /// to `dev.plamenix.plugins.<plugin-id>.<service>` by the host; the
+    /// plugin only supplies `<service>` and `<account>`. Capability:
+    /// `secrets:read:service:<service>`.
+    get: func(service: string, account: string) -> result<option<string>, keyring-error>;
+
+    /// Write a secret to the OS keyring. Capability:
+    /// `secrets:write:service:<service>`.
+    set: func(service: string, account: string, secret: string) -> result<_, keyring-error>;
+
+    /// Delete a secret. Capability: `secrets:write:service:<service>`.
+    delete: func(service: string, account: string) -> result<_, keyring-error>;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Worlds — capability tiers
+// ─────────────────────────────────────────────────────────────────────
+// A plugin's manifest declares which world it targets via the
+// `world` field. The host:
+//   1. Refuses to instantiate a plugin whose declared world is
+//      unknown.
+//   2. Links only the imports the declared world exposes.
+//   3. Cross-checks the manifest's capability grants against the
+//      world's available imports.
+// Plugins that need orthogonal capabilities (keyring, clipboard,
+// notify) on top of the integrated tier target one of the
+// edition-specific variants. New world combinations are SemVer-minor
+// additions and land here as concrete use cases surface.
+
+/// Tier 0 — no capabilities beyond logging and version probe.
+/// Use for: themes, tip packs, pure-UI plugins.
+world plugin-minimal {
     import host;
     export plugin;
+}
+
+/// Tier 1 — read-only database access on top of minimal.
+/// Use for: cell renderers, formatters, object inspectors.
+world plugin-db-reader {
+    include plugin-minimal;
+    import db;
+}
+
+/// Tier 2 — read + write database access on top of db-reader.
+/// Use for: bulk-edit plugins, schema utility plugins, data generators.
+world plugin-db-writer {
+    include plugin-db-reader;
+    import db-write;
+}
+
+/// Tier 3 — full IDE integration on top of db-writer. Adds fs / net /
+/// event-bus / settings / command / clipboard.
+/// Use for: export plugins, auth providers, audit-log integrators.
+world plugin-integrated {
+    include plugin-db-writer;
+    import fs;
+    import net;
+    import event-bus;
+    import settings;
+    import command;
+    import clipboard;
+}
+
+/// Tier 3 + desktop-only orthogonal capabilities (keyring, notify).
+/// Use for: plugins that must reach the OS keychain or post system
+/// notifications; refuses to install on the web edition.
+world plugin-integrated-desktop {
+    include plugin-integrated;
+    import notify;
+    import keyring;
 }

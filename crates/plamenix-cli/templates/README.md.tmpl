@@ -1,0 +1,21 @@
+# {{DISPLAY_NAME}}
+
+Plamenix plugin (`{{PLUGIN_ID}}`).
+
+## Build
+
+```sh
+# Rust half — compiles to wasm32-wasip2 + writes plugin.wasm.
+cargo build --target wasm32-wasip2 --release
+cp target/wasm32-wasip2/release/*.wasm plugin.wasm
+
+# UI half — produces ui.mjs.
+npm run build
+```
+
+## Pack + install
+
+```sh
+plamenix pack .                       # produces <plugin>.plx
+plamenix install ./<plugin>.plx       # registers + activates in the running host
+```

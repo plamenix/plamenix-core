@@ -107,5 +107,6 @@ pub fn resolve_connection_config(
             .clone()
             .or_else(|| profile.charset.clone()),
         encryption_required: overrides.encryption_required.unwrap_or(profile.encryption_required),
+        embedded: profile.embedded,
     })
 }

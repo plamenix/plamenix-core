@@ -83,9 +83,8 @@ pub async fn activate_subprocess(
 
     let permission_strings: Vec<String> = manifest
         .permissions
-        .required
-        .iter()
-        .chain(manifest.permissions.optional.iter())
+        .required_caps()
+        .chain(manifest.permissions.optional_caps())
         .map(Permission::to_string)
         .collect();
     let permissions_json =

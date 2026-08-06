@@ -198,24 +198,101 @@ impl fmt::Display for Permission {
     }
 }
 
+/// One declared capability + optional human-readable rationale.
+///
+/// Mirrors the iOS `Info.plist` *Usage Description* pattern: every
+/// capability the plugin requests carries a sentence explaining
+/// *why*, shown in the install dialog (Section I7) and the
+/// Permissions panel. Marketplace submissions will be rejected when
+/// `purpose` is `None` on any required grant (sideloaded / dev
+/// plugins may ship purpose-less grants for iteration speed).
+///
+/// The grammar shape supports two TOML forms:
+///
+/// ```toml
+/// # Plain string — purpose absent (legacy + dev / sideload plugins)
+/// required = ["db.schema.list"]
+///
+/// # Object form — purpose attached (marketplace submissions)
+/// required = [
+///   { capability = "db.schema.list", purpose = "List tables to choose from" }
+/// ]
+///
+/// # Mixed list — both forms accepted in the same array
+/// required = [
+///   "db.schema.list",
+///   { capability = "fs.write.dir.plugin-data", purpose = "Cache export progress" }
+/// ]
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct PermissionGrant {
+    /// The capability the plugin is asking for.
+    pub capability: Permission,
+    /// One-line rationale shown in install dialog + Permissions panel.
+    /// `None` for legacy / dev plugins; mandatory for marketplace
+    /// submissions (enforced by `plamenix-cli validate` and the
+    /// marketplace submission flow, both deferred to I7).
+    pub purpose: Option<String>,
+}
+
+impl PermissionGrant {
+    /// Constructs a grant without a purpose string (legacy / dev /
+    /// sideload-shaped grant — equivalent to the TOML plain-string
+    /// form).
+    #[must_use]
+    pub fn new(capability: Permission) -> Self {
+        Self {
+            capability,
+            purpose: None,
+        }
+    }
+
+    /// Constructs a grant with an attached rationale.
+    #[must_use]
+    pub fn with_purpose(capability: Permission, purpose: impl Into<String>) -> Self {
+        Self {
+            capability,
+            purpose: Some(purpose.into()),
+        }
+    }
+}
+
 /// The set of permissions a plugin has been granted at install time.
 ///
 /// `required` permissions are non-negotiable; the host refuses to load
 /// a plugin whose required set has been denied. `optional` permissions
-/// surface as a user-facing prompt before grant.
+/// surface as a user-facing prompt before grant. Each entry is a
+/// [`PermissionGrant`] carrying the capability plus an optional
+/// purpose string (Info.plist analog) so the install dialog can show
+/// rationale text per capability.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct PermissionSet {
     /// Permissions the plugin cannot operate without.
-    pub required: Vec<Permission>,
+    pub required: Vec<PermissionGrant>,
     /// Permissions the plugin would like but can run without.
-    pub optional: Vec<Permission>,
+    pub optional: Vec<PermissionGrant>,
 }
 
 impl PermissionSet {
-    /// Returns `true` when the set contains the given permission in
-    /// either the required or optional bucket.
+    /// Returns `true` when either bucket contains the given capability.
     #[must_use]
     pub fn grants(&self, permission: &Permission) -> bool {
-        self.required.contains(permission) || self.optional.contains(permission)
+        self.required.iter().any(|g| &g.capability == permission)
+            || self.optional.iter().any(|g| &g.capability == permission)
+    }
+
+    /// Iterator over capabilities in the required bucket (ignores
+    /// purpose strings). Convenience for callers that only need the
+    /// capability list — e.g. the subprocess activator passes the
+    /// joined capability strings to the plugin binary's `--permissions`
+    /// argument.
+    pub fn required_caps(&self) -> impl Iterator<Item = &Permission> {
+        self.required.iter().map(|g| &g.capability)
+    }
+
+    /// Iterator over capabilities in the optional bucket (ignores
+    /// purpose strings).
+    pub fn optional_caps(&self) -> impl Iterator<Item = &Permission> {
+        self.optional.iter().map(|g| &g.capability)
     }
 }

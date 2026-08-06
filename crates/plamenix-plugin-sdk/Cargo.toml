@@ -6,6 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "Plamenix plugin authoring SDK — subprocess protocol helpers plus the plamenix:plugin WIT contract."
+readme = "README.md"
+keywords = ["plugin", "plamenix", "wit", "wasm"]
+categories = ["api-bindings", "development-tools"]
+homepage = "https://plamenix.dev"
+repository = "https://github.com/plamenix/plamenix-core"
+documentation = "https://docs.rs/plamenix-plugin-sdk"
 publish = false
 
 [dependencies]

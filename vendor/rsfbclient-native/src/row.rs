@@ -89,6 +89,12 @@ pub struct ColumnBuffer {
     col_name: String,
 
     raw_type: i16,
+
+    /// Firebird scale for fixed-point columns: the real value is
+    /// `stored * 10^scale`, negative for NUMERIC/DECIMAL, 0 otherwise.
+    /// Retained so `to_column` can render the exact decimal instead of
+    /// letting the engine round it into a double.
+    scale: i16,
 }
 
 impl ColumnBuffer {
@@ -97,6 +103,9 @@ impl ColumnBuffer {
         // Remove nullable type indicator
         let sqltype = var.sqltype & (!1);
         let sqlsubtype = var.sqlsubtype;
+        // Captured before the match below rewrites `var`, so the scale
+        // of a NUMERIC/DECIMAL column survives the coercion.
+        let sqlscale = var.sqlscale;
 
         let mut nullind = Box::new(0);
         var.sqlind = &mut *nullind;
@@ -136,16 +145,17 @@ impl ColumnBuffer {
             ibase::SQL_SHORT | ibase::SQL_LONG | ibase::SQL_INT64 => {
                 var.sqllen = mem::size_of::<i64>() as i16;
 
-                if var.sqlscale == 0 {
-                    var.sqltype = ibase::SQL_INT64 as i16 + 1;
+                // PLAMENIX PATCH: upstream asks the engine for a double
+                // whenever the scale is non-zero, which is every
+                // NUMERIC/DECIMAL column. Firebird stores those as an
+                // exact scaled integer, so that coercion discards the
+                // exactness inside the driver, before any caller can see
+                // it — NUMERIC(18,4) is the standard money type in
+                // Firebird schemas. Keep the scaled integer; `to_column`
+                // renders the exact decimal using the retained scale.
+                var.sqltype = ibase::SQL_INT64 as i16 + 1;
 
-                    Integer(Box::new(0))
-                } else {
-                    var.sqlscale = 0;
-                    var.sqltype = ibase::SQL_DOUBLE as i16 + 1;
-
-                    Float(Box::new(0.0))
-                }
+                Integer(Box::new(0))
             }
 
             ibase::SQL_FLOAT | ibase::SQL_DOUBLE => {
@@ -259,6 +269,7 @@ impl ColumnBuffer {
             nullind,
             col_name,
             raw_type: sqltype,
+            scale: sqlscale,
         })
     }
 
@@ -280,6 +291,13 @@ impl ColumnBuffer {
 
         let col_type = match &self.buffer {
             Text(varchar) => SqlType::Text(charset.decode(varchar.as_bytes())?),
+
+            // PLAMENIX PATCH: a non-zero scale means NUMERIC or DECIMAL.
+            // `SqlType` has no exact fixed-point variant, so surface the
+            // exact decimal as text — the same treatment INT128 and
+            // DECFLOAT already get below. `raw_type` stays the integer
+            // type code, so a caller can tell this from a real VARCHAR.
+            Integer(i) if self.scale != 0 => SqlType::Text(apply_scale(**i, self.scale)),
 
             Integer(i) => SqlType::Integer(**i),
 
@@ -578,17 +596,17 @@ fn decode_array_element(
         // dtype_short (SMALLINT, i16)
         8 => {
             let v = i16::from_le_bytes(raw[..2].try_into().unwrap_or([0; 2]));
-            apply_scale(v as i64, scale)
+            apply_scale(v as i64, scale.into())
         }
         // dtype_long (INTEGER, i32)
         9 => {
             let v = i32::from_le_bytes(raw[..4].try_into().unwrap_or([0; 4]));
-            apply_scale(v as i64, scale)
+            apply_scale(v as i64, scale.into())
         }
         // dtype_int64 (BIGINT)
         19 => {
             let v = i64::from_le_bytes(raw[..8].try_into().unwrap_or([0; 8]));
-            apply_scale(v, scale)
+            apply_scale(v, scale.into())
         }
         // dtype_real (FLOAT, f32)
         11 => {
@@ -616,21 +634,36 @@ fn decode_array_element(
 }
 
 /// Renders a fixed-point integer using `scale`. Firebird stores
-/// NUMERIC(p,s) as `value * 10^|s|` for s < 0; positive scale is
+/// NUMERIC(p,s) as `value * 10^s` with `s` negative; positive scale is
 /// uncommon but follows the same multiplier on the other side.
-fn apply_scale(v: i64, scale: i8) -> String {
+///
+/// Formats through the digit string rather than dividing: integer
+/// division truncates toward zero, which erased the sign of every value
+/// between -1 and 0 (-5 at scale -4 rendered `0.0005`), and negating
+/// `i64::MIN` overflows.
+fn apply_scale(v: i64, scale: i16) -> String {
     if scale == 0 {
         return v.to_string();
     }
-    if scale < 0 {
-        let factor = 10i64.pow((-(scale as i32)) as u32);
-        let whole = v / factor;
-        let frac = (v % factor).abs();
-        let width = (-(scale as i32)) as usize;
-        return format!("{whole}.{:0>width$}", frac, width = width);
+    let negative = v < 0;
+    let digits = v.unsigned_abs().to_string();
+    let body = if scale > 0 {
+        format!("{digits}{}", "0".repeat(scale as usize))
+    } else {
+        let frac_len = scale.unsigned_abs() as usize;
+        let padded = if digits.len() <= frac_len {
+            format!("{}{digits}", "0".repeat(frac_len - digits.len() + 1))
+        } else {
+            digits
+        };
+        let split = padded.len() - frac_len;
+        format!("{}.{}", &padded[..split], &padded[split..])
+    };
+    if negative {
+        format!("-{body}")
+    } else {
+        body
     }
-    let factor = 10i64.pow(scale as u32);
-    (v.saturating_mul(factor)).to_string()
 }
 
 fn escape_json(s: String) -> String {
@@ -794,6 +827,38 @@ mod tests {
     fn ids_past_the_offset_range_are_opaque_regions() {
         assert_eq!(format_tz_id(2880), "region:2880");
         assert_eq!(format_tz_id(65535), "region:65535");
+    }
+
+    /// NUMERIC/DECIMAL rendering. The previous implementation divided
+    /// by the scale factor, so integer truncation toward zero erased the
+    /// sign of every value between -1 and 0.
+    #[test]
+    fn fixed_point_keeps_the_sign_of_sub_unit_values() {
+        assert_eq!(apply_scale(-5, -4), "-0.0005");
+        assert_eq!(apply_scale(5, -4), "0.0005");
+        assert_eq!(apply_scale(-1, -2), "-0.01");
+    }
+
+    #[test]
+    fn fixed_point_renders_exactly() {
+        assert_eq!(apply_scale(123_456, -4), "12.3456");
+        assert_eq!(apply_scale(0, -2), "0.00");
+        assert_eq!(apply_scale(42, 0), "42");
+        // Past 2^53, where the upstream f64 path loses digits.
+        assert_eq!(apply_scale(999_999_999_999_999_999, -4), "99999999999999.9999");
+    }
+
+    #[test]
+    fn fixed_point_handles_the_range_ends() {
+        // Negating i64::MIN would overflow.
+        assert_eq!(apply_scale(i64::MIN, -2), "-92233720368547758.08");
+        assert_eq!(apply_scale(i64::MAX, 0), i64::MAX.to_string());
+    }
+
+    #[test]
+    fn positive_scale_multiplies_rather_than_truncating() {
+        assert_eq!(apply_scale(5, 2), "500");
+        assert_eq!(apply_scale(-5, 2), "-500");
     }
 
     #[test]

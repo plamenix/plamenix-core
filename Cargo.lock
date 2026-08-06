@@ -2612,8 +2612,6 @@ dependencies = [
 [[package]]
 name = "rsfbclient-rust"
 version = "0.26.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9090f507fff34731eb1117e17d175083f82ce90aeb0c974e8cea5c4437e25ce4"
 dependencies = [
  "bytes",
  "digest 0.10.7",

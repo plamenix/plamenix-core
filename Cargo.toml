@@ -83,3 +83,9 @@ opt-level = 1
 # `isc_array_lookup_bounds` + `isc_array_get_slice` on top of the
 # upstream 0.26 release. See `vendor/rsfbclient-native/src/row.rs`.
 rsfbclient-native = { path = "vendor/rsfbclient-native" }
+# Vendored copy that stops coercing NUMERIC/DECIMAL columns to f64.
+# Upstream describes scaled integers as SQL_DOUBLE, which loses the
+# exact value inside the driver before any caller sees it. See
+# `vendor/rsfbclient-rust/src/xsqlda.rs` and the upstream report drafted
+# at `docs/upstream-rsfbclient-numeric.md` in the plamenix meta repo.
+rsfbclient-rust = { path = "vendor/rsfbclient-rust" }

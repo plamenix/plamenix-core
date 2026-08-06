@@ -19,9 +19,10 @@ test: test-vendor
     cargo test --workspace
     cargo test --workspace --doc
 
-# Run the vendored rsfbclient-native patch's own unit tests.
+# Run the vendored rsfbclient patches' own unit tests.
 test-vendor:
     cd vendor/rsfbclient-native && cargo test --lib
+    cd vendor/rsfbclient-rust && cargo test --lib
 
 # Run rustfmt across the whole workspace.
 fmt:

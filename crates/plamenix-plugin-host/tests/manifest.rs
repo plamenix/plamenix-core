@@ -193,9 +193,9 @@ required = [{ capability = "db.schema.list", purpose = "" }]
 ui = "ui.mjs"
 "#;
     let manifest = Manifest::parse(text).expect("valid manifest");
-    // Empty-string purpose collapses to None — matches the
-    // "marketplace requires non-empty" rule that I7's validator will
-    // enforce (rejecting empty + missing equivalently).
+    // Empty-string purpose collapses to None, so a blank rationale and
+    // an absent one are treated identically rather than showing the
+    // user an empty line where an explanation should be.
     assert!(manifest.permissions.required[0].purpose.is_none());
 }
 

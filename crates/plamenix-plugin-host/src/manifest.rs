@@ -326,7 +326,7 @@ struct RawPermissions {
 /// Untagged serde wrapper that accepts either a bare capability
 /// string OR an object with `capability` + `purpose`. Untagged so
 /// both forms can sit in the same list, e.g. one legacy plain-string
-/// entry alongside a marketplace-shaped object entry with purpose.
+/// entry alongside an object entry carrying a purpose.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum RawPermissionGrant {

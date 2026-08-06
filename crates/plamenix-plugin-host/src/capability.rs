@@ -202,18 +202,18 @@ impl fmt::Display for Permission {
 ///
 /// Mirrors the iOS `Info.plist` *Usage Description* pattern: every
 /// capability the plugin requests carries a sentence explaining
-/// *why*, shown in the install dialog (Section I7) and the
-/// Permissions panel. Marketplace submissions will be rejected when
-/// `purpose` is `None` on any required grant (sideloaded / dev
-/// plugins may ship purpose-less grants for iteration speed).
+/// *why*, shown in the install dialog and the Permissions panel.
+/// Optional: a plugin may ship purpose-less grants, in which case the
+/// install dialog shows the capability without a rationale and the
+/// user judges it on the capability alone.
 ///
 /// The grammar shape supports two TOML forms:
 ///
 /// ```toml
-/// # Plain string — purpose absent (legacy + dev / sideload plugins)
+/// # Plain string — no purpose given
 /// required = ["db.schema.list"]
 ///
-/// # Object form — purpose attached (marketplace submissions)
+/// # Object form — purpose attached
 /// required = [
 ///   { capability = "db.schema.list", purpose = "List tables to choose from" }
 /// ]
@@ -228,10 +228,10 @@ impl fmt::Display for Permission {
 pub struct PermissionGrant {
     /// The capability the plugin is asking for.
     pub capability: Permission,
-    /// One-line rationale shown in install dialog + Permissions panel.
-    /// `None` for legacy / dev plugins; mandatory for marketplace
-    /// submissions (enforced by `plamenix-cli validate` and the
-    /// marketplace submission flow, both deferred to I7).
+    /// One-line rationale shown in the install dialog and Permissions
+    /// panel. `None` when the author did not supply one; `plamenix-cli
+    /// validate` warns but does not reject, since the capability itself
+    /// is what the host enforces.
     pub purpose: Option<String>,
 }
 

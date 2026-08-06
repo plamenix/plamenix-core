@@ -21,12 +21,16 @@ pub mod resolver;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use plamenix_types::{
     AttachmentInfo, ColumnInfo, ConnectionConfig, DatabaseStats, DomainInfo, GeneratorInfo,
     MonDatabase, ProcedureInfo, Schema, SessionId, StatementInfo, TableInfo, TableKind,
     TriggerInfo,
+};
+use rsfbclient::prelude::{
+    TrDataAccessMode, TrIsolationLevel, TrLockResolution, TrRecordVersion, TransactionConfiguration,
 };
 use rsfbclient::{Execute, Queryable, Row as RsfbRow, SimpleConnection, SqlType};
 use tokio::sync::Mutex;
@@ -35,8 +39,94 @@ use crate::crypt::CryptState;
 use crate::driver::{ConnectMode, DbDriver};
 use crate::error::DbError;
 use crate::query::{BlobRef, Column, ColumnValue, QueryResult, Row};
+use crate::transaction::{TxConfig, TxIsolation, TxLocking, TxMode, TxStatus};
 
 type SharedConn = Arc<Mutex<SimpleConnection>>;
+
+/// Runtime transaction state for one session.
+#[derive(Clone, Copy, Debug)]
+struct TxRuntime {
+    mode: TxMode,
+    config: TxConfig,
+    open: bool,
+    pending: u32,
+    started_at: Option<Instant>,
+}
+
+impl TxRuntime {
+    const fn new() -> Self {
+        Self {
+            mode: TxMode::Autocommit,
+            config: TxConfig {
+                isolation: TxIsolation::ReadCommitted,
+                locking: TxLocking::NoWait,
+            },
+            open: false,
+            pending: 0,
+            started_at: None,
+        }
+    }
+
+    fn status(&self) -> TxStatus {
+        TxStatus {
+            mode: self.mode,
+            config: self.config,
+            open: self.open,
+            pending_statements: self.pending,
+            age_ms: self
+                .started_at
+                .map(|t| u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX))
+                .unwrap_or(0),
+        }
+    }
+}
+
+/// One attached session.
+///
+/// Two attachments, deliberately. `work` runs the statements the user
+/// types and is what manual mode holds a transaction on. `meta` serves
+/// Plamenix's own reads — schema, dashboard, ping, crypt state — as a
+/// read-only read-committed attachment, so background chatter never
+/// joins the user's transaction and browsing never holds anything open.
+///
+/// The user's own statements stay on `work` whatever they are, so a
+/// `SELECT` after an `UPDATE` sees the uncommitted change, as it must.
+#[derive(Clone)]
+struct Session {
+    work: SharedConn,
+    meta: SharedConn,
+    tx: Arc<Mutex<TxRuntime>>,
+}
+
+/// Transaction settings for the metadata attachment.
+///
+/// Read-only so it can never write, and read-committed so it never
+/// holds a snapshot: metadata reads must not pin the oldest active
+/// transaction while the user browses.
+fn meta_tx_config() -> TransactionConfiguration {
+    TransactionConfiguration {
+        data_access: TrDataAccessMode::ReadOnly,
+        isolation: TrIsolationLevel::ReadCommited(TrRecordVersion::NoRecordVersion),
+        lock_resolution: TrLockResolution::NoWait,
+    }
+}
+
+/// Maps Plamenix's transaction settings onto rsfbclient's.
+fn work_tx_config(config: TxConfig) -> TransactionConfiguration {
+    TransactionConfiguration {
+        data_access: TrDataAccessMode::ReadWrite,
+        isolation: match config.isolation {
+            TxIsolation::ReadCommitted => {
+                TrIsolationLevel::ReadCommited(TrRecordVersion::RecordVersion)
+            }
+            TxIsolation::Snapshot => TrIsolationLevel::Concurrency,
+        },
+        lock_resolution: match config.locking {
+            TxLocking::Wait(timeout) => TrLockResolution::Wait(timeout),
+            TxLocking::NoWait => TrLockResolution::NoWait,
+        },
+    }
+}
 
 /// Length in bytes of the BLOB peek preview surfaced inline with each
 /// result cell. Enough for MIME-sniffing and a hex chip in the table
@@ -53,7 +143,7 @@ type BlobBin = HashMap<String, Vec<u8>>;
 /// session registry through an `Arc`.
 #[derive(Clone, Default)]
 pub struct RsfbDriver {
-    sessions: Arc<Mutex<HashMap<SessionId, SharedConn>>>,
+    sessions: Arc<Mutex<HashMap<SessionId, Session>>>,
     blobs: Arc<Mutex<HashMap<SessionId, BlobBin>>>,
 }
 
@@ -64,12 +154,66 @@ impl RsfbDriver {
         Self::default()
     }
 
-    async fn shared_conn(&self, session: SessionId) -> Result<SharedConn, DbError> {
+    async fn session(&self, session: SessionId) -> Result<Session, DbError> {
         let sessions = self.sessions.lock().await;
         sessions
             .get(&session)
             .cloned()
             .ok_or_else(|| DbError::Driver(format!("unknown session: {session:?}")))
+    }
+
+    /// The read-only attachment used for schema, dashboard and ping, so
+    /// they neither join the user's transaction nor hold one open.
+    async fn meta_conn(&self, session: SessionId) -> Result<SharedConn, DbError> {
+        Ok(self.session(session).await?.meta)
+    }
+
+    /// Ends the open transaction, committing or rolling it back.
+    ///
+    /// State is cleared whatever the engine says. If the commit itself
+    /// failed the transaction is gone regardless, and leaving the
+    /// session believing it still holds one would strand it — every
+    /// later statement would try to join a transaction that no longer
+    /// exists.
+    async fn finish_transaction(
+        &self,
+        session: SessionId,
+        commit: bool,
+    ) -> Result<TxStatus, DbError> {
+        let state = self.session(session).await?;
+        let mut tx = state.tx.lock().await;
+        if !tx.open {
+            return Err(DbError::Driver("no transaction is open".into()));
+        }
+        let conn = Arc::clone(&state.work);
+        let outcome = tokio::task::spawn_blocking(move || {
+            let mut guard = conn.blocking_lock();
+            if commit {
+                guard.commit()
+            } else {
+                guard.rollback()
+            }
+            .map_err(|err| DbError::Driver(err.to_string()))
+        })
+        .await?;
+
+        tx.open = false;
+        tx.pending = 0;
+        tx.started_at = None;
+        outcome?;
+        Ok(tx.status())
+    }
+
+    /// Applies a mutation to a session's transaction state and returns
+    /// the resulting status.
+    async fn with_tx<F>(&self, session: SessionId, f: F) -> Result<TxStatus, DbError>
+    where
+        F: FnOnce(&mut TxRuntime) -> Result<(), DbError>,
+    {
+        let state = self.session(session).await?;
+        let mut tx = state.tx.lock().await;
+        f(&mut tx)?;
+        Ok(tx.status())
     }
 }
 
@@ -121,7 +265,27 @@ impl DbDriver for RsfbDriver {
             }
         }
 
-        let conn = tokio::task::spawn_blocking(move || build_connection(&config, &mode)).await??;
+        // Two attachments per session: one for the user's statements,
+        // one read-only for Plamenix's own metadata reads. Opening both
+        // up front keeps the read path available even while the work
+        // attachment sits inside a long manual transaction.
+        let (conn, meta) = {
+            let config = config.clone();
+            let mode = mode.clone();
+            tokio::task::spawn_blocking(move || -> Result<_, DbError> {
+                let work = build_connection(
+                    &config,
+                    &mode,
+                    work_tx_config(TxConfig {
+                        isolation: TxIsolation::ReadCommitted,
+                        locking: TxLocking::NoWait,
+                    }),
+                )?;
+                let meta = build_connection(&config, &mode, meta_tx_config())?;
+                Ok((work, meta))
+            })
+            .await??
+        };
 
         // Best-effort wipe of the process-global key slot once the
         // attach handshake completes (success or failure). Leaves
@@ -131,9 +295,13 @@ impl DbDriver for RsfbDriver {
         crate::crypt_callback::clear_key();
 
         let id = SessionId::new();
-        let shared = Arc::new(Mutex::new(conn));
+        let state = Session {
+            work: Arc::new(Mutex::new(conn)),
+            meta: Arc::new(Mutex::new(meta)),
+            tx: Arc::new(Mutex::new(TxRuntime::new())),
+        };
 
-        self.sessions.lock().await.insert(id, shared);
+        self.sessions.lock().await.insert(id, state);
         tracing::info!(?id, "session attached");
 
         if encryption_required {
@@ -163,7 +331,44 @@ impl DbDriver for RsfbDriver {
         fields(session = %session.0, sql_len = sql.len()),
     )]
     async fn execute(&self, session: SessionId, sql: String) -> Result<QueryResult, DbError> {
-        let shared = self.shared_conn(session).await?;
+        // A typed COMMIT or ROLLBACK is transaction control, not a
+        // statement to hand the engine — rsfbclient owns the transaction
+        // handle, so passing it through would fail. Route it to the same
+        // path the toolbar buttons use.
+        match transaction_keyword(&sql) {
+            Some(TransactionKeyword::Commit) => {
+                self.commit(session).await?;
+                return Ok(QueryResult::Affected { rows: 0 });
+            }
+            Some(TransactionKeyword::Rollback) => {
+                self.rollback(session).await?;
+                return Ok(QueryResult::Affected { rows: 0 });
+            }
+            None => {}
+        }
+
+        let state = self.session(session).await?;
+        // In manual mode the first statement opens the transaction, the
+        // way every SQL client behaves — the user should not have to
+        // press "begin" before typing.
+        {
+            let mut tx = state.tx.lock().await;
+            if tx.mode == TxMode::Manual && !tx.open {
+                let conn = Arc::clone(&state.work);
+                let confs = work_tx_config(tx.config);
+                tokio::task::spawn_blocking(move || {
+                    conn.blocking_lock()
+                        .begin_transaction_config(confs)
+                        .map_err(|err| DbError::Driver(err.to_string()))
+                })
+                .await??;
+                tx.open = true;
+                tx.pending = 0;
+                tx.started_at = Some(Instant::now());
+            }
+        }
+
+        let shared = Arc::clone(&state.work);
         let blobs_arc = Arc::clone(&self.blobs);
         let (result, bin) =
             tokio::task::spawn_blocking(move || -> Result<(QueryResult, BlobBin), DbError> {
@@ -173,6 +378,17 @@ impl DbDriver for RsfbDriver {
                 Ok((result, bin))
             })
             .await??;
+
+        // Counted only on success. A failed statement leaves the
+        // transaction open and usable — Firebird does not abort it — so
+        // the user can correct the statement and carry on, but it did
+        // not contribute anything a rollback would discard.
+        {
+            let mut tx = state.tx.lock().await;
+            if tx.open {
+                tx.pending = tx.pending.saturating_add(1);
+            }
+        }
         // Replace any previous BLOB cache for this session — fresh
         // execute, fresh handles.
         blobs_arc.lock().await.insert(session, bin);
@@ -181,7 +397,7 @@ impl DbDriver for RsfbDriver {
 
     #[tracing::instrument(name = "db.ping", skip(self), fields(session = %session.0))]
     async fn ping(&self, session: SessionId) -> Result<String, DbError> {
-        let shared = self.shared_conn(session).await?;
+        let shared = self.meta_conn(session).await?;
         tokio::task::spawn_blocking(move || {
             let mut guard = shared.blocking_lock();
             run_ping(&mut guard)
@@ -192,13 +408,110 @@ impl DbDriver for RsfbDriver {
     #[tracing::instrument(name = "db.close", skip(self), fields(session = %session.0))]
     async fn close(&self, session: SessionId) -> Result<(), DbError> {
         let mut sessions = self.sessions.lock().await;
-        if sessions.remove(&session).is_some() {
-            self.blobs.lock().await.remove(&session);
-            tracing::info!(?session, "session detached");
-            Ok(())
-        } else {
-            Err(DbError::Driver(format!("unknown session: {session:?}")))
+        let Some(state) = sessions.remove(&session) else {
+            return Err(DbError::Driver(format!("unknown session: {session:?}")));
+        };
+        drop(sessions);
+
+        // Roll back rather than commit. Detaching is not consent to
+        // write: a session going away with work outstanding — a closed
+        // tab, a dropped connection — must not silently commit it. The
+        // shell is expected to have asked the user first; this is the
+        // backstop for the paths that cannot ask.
+        let mut tx = state.tx.lock().await;
+        if tx.open {
+            let conn = Arc::clone(&state.work);
+            let pending = tx.pending;
+            let rolled = tokio::task::spawn_blocking(move || {
+                conn.blocking_lock()
+                    .rollback()
+                    .map_err(|err| DbError::Driver(err.to_string()))
+            })
+            .await?;
+            match rolled {
+                Ok(()) => tracing::warn!(
+                    ?session,
+                    pending,
+                    "session closed with an open transaction; rolled back",
+                ),
+                Err(err) => tracing::error!(
+                    ?session,
+                    pending,
+                    ?err,
+                    "session closed with an open transaction and the rollback failed",
+                ),
+            }
+            tx.open = false;
+            tx.pending = 0;
+            tx.started_at = None;
         }
+        drop(tx);
+
+        self.blobs.lock().await.remove(&session);
+        tracing::info!(?session, "session detached");
+        Ok(())
+    }
+
+    #[tracing::instrument(name = "db.set_transaction_mode", skip(self), fields(session = %session.0, ?mode))]
+    async fn set_transaction_mode(
+        &self,
+        session: SessionId,
+        mode: TxMode,
+        config: TxConfig,
+    ) -> Result<TxStatus, DbError> {
+        self.with_tx(session, |tx| {
+            if tx.open {
+                return Err(DbError::Driver(
+                    "commit or roll back before changing transaction mode".into(),
+                ));
+            }
+            tx.mode = mode;
+            tx.config = config;
+            Ok(())
+        })
+        .await
+    }
+
+    #[tracing::instrument(name = "db.begin_transaction", skip(self), fields(session = %session.0))]
+    async fn begin_transaction(&self, session: SessionId) -> Result<TxStatus, DbError> {
+        let state = self.session(session).await?;
+        let mut tx = state.tx.lock().await;
+        if tx.open {
+            return Err(DbError::Driver("a transaction is already open".into()));
+        }
+        if tx.mode != TxMode::Manual {
+            return Err(DbError::Driver(
+                "switch to manual commit before opening a transaction".into(),
+            ));
+        }
+        let conn = Arc::clone(&state.work);
+        let confs = work_tx_config(tx.config);
+        tokio::task::spawn_blocking(move || {
+            conn.blocking_lock()
+                .begin_transaction_config(confs)
+                .map_err(|err| DbError::Driver(err.to_string()))
+        })
+        .await??;
+        tx.open = true;
+        tx.pending = 0;
+        tx.started_at = Some(Instant::now());
+        Ok(tx.status())
+    }
+
+    #[tracing::instrument(name = "db.commit", skip(self), fields(session = %session.0))]
+    async fn commit(&self, session: SessionId) -> Result<TxStatus, DbError> {
+        self.finish_transaction(session, true).await
+    }
+
+    #[tracing::instrument(name = "db.rollback", skip(self), fields(session = %session.0))]
+    async fn rollback(&self, session: SessionId) -> Result<TxStatus, DbError> {
+        self.finish_transaction(session, false).await
+    }
+
+    async fn transaction_status(&self, session: SessionId) -> Result<TxStatus, DbError> {
+        let state = self.session(session).await?;
+        let tx = state.tx.lock().await;
+        Ok(tx.status())
     }
 
     #[tracing::instrument(name = "db.fetch_blob", skip(self), fields(session = %session.0, blob = %blob_id))]
@@ -217,7 +530,7 @@ impl DbDriver for RsfbDriver {
 
     #[tracing::instrument(name = "db.crypt_state", skip(self), fields(session = %session.0))]
     async fn crypt_state(&self, session: SessionId) -> Result<CryptState, DbError> {
-        let shared = self.shared_conn(session).await?;
+        let shared = self.meta_conn(session).await?;
         tokio::task::spawn_blocking(move || {
             let mut guard = shared.blocking_lock();
             run_crypt_state(&mut guard)
@@ -231,7 +544,7 @@ impl DbDriver for RsfbDriver {
         fields(session = %session.0),
     )]
     async fn describe_schema(&self, session: SessionId) -> Result<Schema, DbError> {
-        let shared = self.shared_conn(session).await?;
+        let shared = self.meta_conn(session).await?;
         tokio::task::spawn_blocking(move || {
             let mut guard = shared.blocking_lock();
             run_describe_schema(&mut guard)
@@ -245,7 +558,7 @@ impl DbDriver for RsfbDriver {
         fields(session = %session.0),
     )]
     async fn database_stats(&self, session: SessionId) -> Result<DatabaseStats, DbError> {
-        let shared = self.shared_conn(session).await?;
+        let shared = self.meta_conn(session).await?;
         tokio::task::spawn_blocking(move || {
             let mut guard = shared.blocking_lock();
             run_database_stats(&mut guard)
@@ -257,15 +570,19 @@ impl DbDriver for RsfbDriver {
 fn build_connection(
     config: &ConnectionConfig,
     mode: &ConnectMode,
+    tx: TransactionConfiguration,
 ) -> Result<SimpleConnection, DbError> {
     match mode {
-        ConnectMode::Native => build_native(config),
-        ConnectMode::PureRust => build_pure_rust(config),
+        ConnectMode::Native => build_native(config, tx),
+        ConnectMode::PureRust => build_pure_rust(config, tx),
     }
 }
 
 #[cfg(feature = "native")]
-fn build_native(config: &ConnectionConfig) -> Result<SimpleConnection, DbError> {
+fn build_native(
+    config: &ConnectionConfig,
+    tx: TransactionConfiguration,
+) -> Result<SimpleConnection, DbError> {
     let Some(path) = resolver::resolve_fbclient_path(config) else {
         return Err(DbError::Connect(
             "native mode requires a bundled fbclient: set ConnectionConfig.fbclient_path \
@@ -284,6 +601,7 @@ fn build_native(config: &ConnectionConfig) -> Result<SimpleConnection, DbError> 
         builder.db_name(&config.database);
         builder.user(&config.user);
         apply_charset_embedded(&mut builder, config)?;
+        builder.transaction(tx);
         return builder
             .connect()
             .map(SimpleConnection::from)
@@ -299,6 +617,7 @@ fn build_native(config: &ConnectionConfig) -> Result<SimpleConnection, DbError> 
         .user(&config.user)
         .pass(&config.password);
     apply_charset(&mut builder, config)?;
+    builder.transaction(tx);
     builder
         .connect()
         .map(SimpleConnection::from)
@@ -341,14 +660,20 @@ where
 }
 
 #[cfg(not(feature = "native"))]
-fn build_native(_config: &ConnectionConfig) -> Result<SimpleConnection, DbError> {
+fn build_native(
+    _config: &ConnectionConfig,
+    _tx: TransactionConfiguration,
+) -> Result<SimpleConnection, DbError> {
     Err(DbError::Driver(
         "native backend not compiled in (enable the `native` feature)".into(),
     ))
 }
 
 #[cfg(feature = "pure-rust")]
-fn build_pure_rust(config: &ConnectionConfig) -> Result<SimpleConnection, DbError> {
+fn build_pure_rust(
+    config: &ConnectionConfig,
+    tx: TransactionConfiguration,
+) -> Result<SimpleConnection, DbError> {
     use std::str::FromStr;
     if config.embedded {
         return Err(DbError::Connect(
@@ -371,6 +696,7 @@ fn build_pure_rust(config: &ConnectionConfig) -> Result<SimpleConnection, DbErro
             builder.charset(charset);
         }
     }
+    builder.transaction(tx);
     builder
         .connect()
         .map(SimpleConnection::from)
@@ -378,10 +704,45 @@ fn build_pure_rust(config: &ConnectionConfig) -> Result<SimpleConnection, DbErro
 }
 
 #[cfg(not(feature = "pure-rust"))]
-fn build_pure_rust(_config: &ConnectionConfig) -> Result<SimpleConnection, DbError> {
+fn build_pure_rust(
+    _config: &ConnectionConfig,
+    _tx: TransactionConfiguration,
+) -> Result<SimpleConnection, DbError> {
     Err(DbError::Driver(
         "pure-rust backend not compiled in (enable the `pure-rust` feature)".into(),
     ))
+}
+
+/// A statement that is transaction control rather than SQL to execute.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TransactionKeyword {
+    Commit,
+    Rollback,
+}
+
+/// Recognises a bare `COMMIT` or `ROLLBACK`.
+///
+/// Only the bare forms. `COMMIT RETAINING` is deliberately not matched:
+/// it commits while keeping the transaction context, so the oldest
+/// active transaction stays pinned and garbage collection stays
+/// stalled — the behaviour this feature exists to avoid. `ROLLBACK TO
+/// SAVEPOINT` is likewise unmatched, since savepoints are out of scope;
+/// both fall through to the engine, which reports them plainly.
+fn transaction_keyword(sql: &str) -> Option<TransactionKeyword> {
+    let normalised = sql.trim().trim_end_matches(';');
+    let mut words = normalised.split_whitespace();
+    let first = words.next()?.to_ascii_uppercase();
+    // A trailing WORK is the SQL-standard noise word and changes nothing.
+    let rest: Vec<String> = words.map(|w| w.to_ascii_uppercase()).collect();
+    let bare = rest.is_empty() || rest == ["WORK"];
+    if !bare {
+        return None;
+    }
+    match first.as_str() {
+        "COMMIT" => Some(TransactionKeyword::Commit),
+        "ROLLBACK" => Some(TransactionKeyword::Rollback),
+        _ => None,
+    }
 }
 
 fn run_statement(

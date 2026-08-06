@@ -39,6 +39,7 @@ pub mod error;
 pub mod export;
 pub mod query;
 pub mod rsfb;
+pub mod transaction;
 
 pub use crypt::CryptState;
 pub use driver::{ConnectMode, DbDriver};
@@ -49,6 +50,7 @@ pub use query::{
 };
 pub use rsfb::RsfbDriver;
 pub use rsfb::resolver::{FBCLIENT_PATH_ENV, resolve_fbclient_path};
+pub use transaction::{TxConfig, TxIsolation, TxLocking, TxMode, TxStatus};
 
 // Re-export for downstream crates that only depend on `plamenix-db`.
 pub use plamenix_types::{ColumnInfo, ConnectionConfig, Schema, SessionId, TableInfo, TableKind};

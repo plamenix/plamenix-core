@@ -40,35 +40,6 @@ pub enum PluginError {
     #[error("wasm runtime error: {0}")]
     Runtime(String),
 
-    /// `runtime.requires_subprocess` was set but no
-    /// `entry_points.subprocess` path is present.
-    #[error("manifest sets runtime.requires_subprocess without entry_points.subprocess")]
-    MissingSubprocessEntry,
-
-    /// `runtime.requires_subprocess` was set but the plugin did not
-    /// list `runtime.subprocess` in its capability set.
-    #[error("subprocess activation requires the `runtime.subprocess` capability")]
-    MissingSubprocessCapability,
-
-    /// The declared subprocess binary is not present at the path.
-    #[error("subprocess binary missing at {0}")]
-    SubprocessMissing(PathBuf),
-
-    /// The subprocess could not be spawned, timed out, or exited with a
-    /// non-zero status before producing a valid activation result.
-    #[error("subprocess failed (exit {code:?}): {message}")]
-    SubprocessFailed {
-        /// Process exit code, when the process exited cleanly.
-        code: Option<i32>,
-        /// Human-readable cause.
-        message: String,
-    },
-
-    /// The subprocess exited successfully but its stdout did not match
-    /// the activation protocol.
-    #[error("subprocess protocol error: {0}")]
-    SubprocessProtocol(String),
-
     /// IO error reading bundle files.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),

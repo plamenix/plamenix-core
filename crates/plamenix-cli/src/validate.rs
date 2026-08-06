@@ -45,10 +45,6 @@ pub struct ValidationReport {
     pub has_wasm_entry: bool,
     /// Was the UI entry point declared?
     pub has_ui_entry: bool,
-    /// Was the subprocess entry point declared?
-    pub has_subprocess_entry: bool,
-    /// Did the manifest set `runtime.requires_subprocess`?
-    pub requires_subprocess: bool,
 }
 
 impl ValidationReport {
@@ -62,8 +58,6 @@ impl ValidationReport {
             optional_count: manifest.permissions.optional.len(),
             has_wasm_entry: manifest.entry_points.wasm.is_some(),
             has_ui_entry: manifest.entry_points.ui.is_some(),
-            has_subprocess_entry: manifest.entry_points.subprocess.is_some(),
-            requires_subprocess: manifest.runtime.requires_subprocess,
         }
     }
 }
@@ -99,7 +93,6 @@ pub fn render_report(report: &ValidationReport) -> String {
     let entries = [
         report.has_wasm_entry.then_some("wasm"),
         report.has_ui_entry.then_some("ui"),
-        report.has_subprocess_entry.then_some("subprocess"),
     ]
     .into_iter()
     .flatten()
@@ -111,7 +104,7 @@ pub fn render_report(report: &ValidationReport) -> String {
         entries
     };
     format!(
-        "{name} ({id}) v{version}\n  api:       {api}\n  entries:   {entries}\n  perms:     {req} required, {opt} optional\n  subproc:   {sub}",
+        "{name} ({id}) v{version}\n  api:       {api}\n  entries:   {entries}\n  perms:     {req} required, {opt} optional",
         name = report.plugin_name,
         id = report.plugin_id,
         version = report.plugin_version,
@@ -119,11 +112,6 @@ pub fn render_report(report: &ValidationReport) -> String {
         entries = entries_display,
         req = report.required_count,
         opt = report.optional_count,
-        sub = if report.requires_subprocess {
-            "yes"
-        } else {
-            "no"
-        },
     )
 }
 
@@ -159,7 +147,6 @@ ui = "ui.mjs"
 
 [runtime]
 restart_policy = "transient"
-requires_subprocess = false
 
 [permissions]
 required = [{req_list}]
@@ -253,13 +240,10 @@ optional = [{opt_list}]
             optional_count: 2,
             has_wasm_entry: true,
             has_ui_entry: true,
-            has_subprocess_entry: false,
-            requires_subprocess: false,
         };
         let s = render_report(&report);
         assert!(s.contains("X Y (x.y) v1.0.0"));
         assert!(s.contains("wasm, ui"));
         assert!(s.contains("1 required, 2 optional"));
-        assert!(s.contains("subproc:   no"));
     }
 }

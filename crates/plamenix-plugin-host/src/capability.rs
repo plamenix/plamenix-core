@@ -46,7 +46,6 @@ pub enum Permission {
     ClipboardWrite,
     OsNotify,
     OsOpenUrl,
-    RuntimeSubprocess,
 }
 
 /// Whitelisted logical directories that plugins may read or write.
@@ -161,7 +160,6 @@ impl Permission {
             ["clipboard", "write"] => Ok(Self::ClipboardWrite),
             ["os", "notify"] => Ok(Self::OsNotify),
             ["os", "open-url"] => Ok(Self::OsOpenUrl),
-            ["runtime", "subprocess"] => Ok(Self::RuntimeSubprocess),
             _ => Err(PluginError::InvalidCapability(
                 raw.to_owned(),
                 "no matching capability rule",
@@ -193,7 +191,6 @@ impl fmt::Display for Permission {
             Self::ClipboardWrite => f.write_str("clipboard.write"),
             Self::OsNotify => f.write_str("os.notify"),
             Self::OsOpenUrl => f.write_str("os.open-url"),
-            Self::RuntimeSubprocess => f.write_str("runtime.subprocess"),
         }
     }
 }
@@ -283,7 +280,7 @@ impl PermissionSet {
 
     /// Iterator over capabilities in the required bucket (ignores
     /// purpose strings). Convenience for callers that only need the
-    /// capability list — e.g. the subprocess activator passes the
+    /// capability list — e.g. an activator passes the
     /// joined capability strings to the plugin binary's `--permissions`
     /// argument.
     pub fn required_caps(&self) -> impl Iterator<Item = &Permission> {

@@ -47,22 +47,12 @@ impl From<wit_plugin::Activation> for ActivationOutcome {
 
 /// Instantiates `staged` with a default host state and calls its
 /// `activate` export.
-///
-/// When the plugin's manifest sets `runtime.requires_subprocess`, the
-/// call is dispatched to [`crate::subprocess::activate_subprocess`]
-/// instead of the WASM pipeline.
-///
-/// # Errors
-///
-/// See [`activate_with_state`] and
-/// [`crate::subprocess::activate_subprocess`].
 #[tracing::instrument(
     name = "plugin.activate",
     skip(host, staged),
     fields(
         plugin_id = %staged.manifest.plugin.id,
         version = %staged.manifest.plugin.version,
-        subprocess = staged.manifest.runtime.requires_subprocess,
     ),
 )]
 pub async fn activate(
@@ -70,9 +60,6 @@ pub async fn activate(
     host_version: &str,
     staged: &StagedPlugin,
 ) -> Result<ActivationOutcome, PluginError> {
-    if staged.manifest.runtime.requires_subprocess {
-        return crate::subprocess::activate_subprocess(host_version, staged).await;
-    }
     let state = HostState::new(&staged.manifest.plugin.id, host_version);
     activate_with_state(host, state, staged).await
 }

@@ -25,7 +25,6 @@ optional = ["net.https.api.example.com"]
 ui = "dist/ui.mjs"
 
 [runtime]
-requires_subprocess = false
 "#;
 
 #[test]
@@ -106,10 +105,6 @@ fn parses_scoped_capabilities() {
     assert_eq!(
         Permission::parse("fs.read.dir.downloads").unwrap(),
         Permission::FsReadDir(LogicalDir::Downloads),
-    );
-    assert_eq!(
-        Permission::parse("runtime.subprocess").unwrap(),
-        Permission::RuntimeSubprocess,
     );
 }
 

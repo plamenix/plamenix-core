@@ -18,12 +18,8 @@
 //!     └── ...
 //! ```
 //!
-//! Native-binary (subprocess) plugins ship their executable inside
-//! the archive too — typically `bin/<arch>/plugin` — but the host
-//! doesn't constrain that path layout because the manifest's
-//! `[entry_points].subprocess` field already names it. The
-//! extractor preserves the relative tree; the loader validates the
-//! pointed-at file exists.
+//! The extractor preserves the archive's relative tree; the loader
+//! validates that the files the manifest points at exist.
 //!
 //! # Path-traversal safety
 //!

@@ -42,7 +42,6 @@ pub mod loader;
 pub mod manifest;
 pub mod plx;
 pub mod signing;
-pub mod subprocess;
 pub mod supervisor;
 
 pub use activator::{
@@ -78,7 +77,6 @@ pub use signing::{
     embed_signature_into_archive, sign_archive, sign_archive_bytes, verify_archive,
     verify_archive_bytes,
 };
-pub use subprocess::activate_subprocess;
 pub use supervisor::{
     CrashBudget, CrashBudgetState, DisableReason, ExitReason, PluginStatus, PluginSupervisionState,
     RestartDecision, Supervisor,

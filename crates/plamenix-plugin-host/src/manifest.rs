@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 use crate::capability::{Permission, PermissionGrant, PermissionSet};
 use crate::error::PluginError;
 
-const RUNTIME_SUBPROCESS_CAPABILITY: Permission = Permission::RuntimeSubprocess;
 const DEFAULT_WORLD: &str = "plamenix:plugin@1.0.0/plugin-minimal";
 
 /// Plamenix edition a plugin can target.
@@ -23,7 +22,7 @@ const DEFAULT_WORLD: &str = "plamenix:plugin@1.0.0/plugin-minimal";
 /// Manifests declare a `targets` list; the host filters plugins whose
 /// declared targets exclude the current edition at install time. Pure
 /// WASM plugins using only universal capabilities should target both;
-/// plugins reaching for OS keyring or native subprocess hooks should
+/// plugins reaching for the OS keyring should
 /// declare desktop-only.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -93,7 +92,7 @@ pub struct Manifest {
     pub permissions: PermissionSet,
     /// File paths within the bundle for wasm and UI halves.
     pub entry_points: EntryPoints,
-    /// Runtime-mode flags (subprocess, sandbox opt-outs).
+    /// `[runtime]` flags — currently the optional resource limits.
     pub runtime: RuntimeFlags,
     /// Declarative UI contributions advertised by the plugin. Optional —
     /// plugins that only do background work leave this empty.
@@ -192,18 +191,11 @@ pub struct EntryPoints {
     /// Path to the ESM module exporting React contributions. Optional;
     /// some plugins ship only a backend half.
     pub ui: Option<PathBuf>,
-    /// Path to a native executable for plugins that opt out of the
-    /// WASM sandbox via `runtime.requires_subprocess`. Required when
-    /// that flag is set, ignored otherwise.
-    pub subprocess: Option<PathBuf>,
 }
 
 /// `[runtime]` table — flags that change how the host loads the plugin.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RuntimeFlags {
-    /// When `true`, the plugin must run in a subprocess (out of the
-    /// WASM sandbox). Requires `runtime.subprocess` capability.
-    pub requires_subprocess: bool,
     /// I8.6 — optional `[runtime.limits]` table. Override per-store
     /// wasmtime caps (memory in MiB, table/instance counts). Missing
     /// fields leave the default in place. Hosts MAY refuse to grant
@@ -360,24 +352,16 @@ impl RawPermissionGrant {
 struct RawEntryPoints {
     wasm: Option<PathBuf>,
     ui: Option<PathBuf>,
-    subprocess: Option<PathBuf>,
 }
 
 impl TryFrom<RawManifest> for Manifest {
     type Error = PluginError;
 
     fn try_from(raw: RawManifest) -> Result<Self, Self::Error> {
-        if raw.entry_points.wasm.is_none()
-            && raw.entry_points.ui.is_none()
-            && raw.entry_points.subprocess.is_none()
-        {
+        if raw.entry_points.wasm.is_none() && raw.entry_points.ui.is_none() {
             return Err(PluginError::InvalidManifest(
-                "entry_points must define at least one of `wasm`, `ui`, or `subprocess`".into(),
+                "entry_points must define at least one of `wasm` or `ui`".into(),
             ));
-        }
-
-        if raw.runtime.requires_subprocess && raw.entry_points.subprocess.is_none() {
-            return Err(PluginError::MissingSubprocessEntry);
         }
 
         let world = raw
@@ -442,17 +426,12 @@ impl TryFrom<RawManifest> for Manifest {
 
         let permissions = PermissionSet { required, optional };
 
-        if raw.runtime.requires_subprocess && !permissions.grants(&RUNTIME_SUBPROCESS_CAPABILITY) {
-            return Err(PluginError::MissingSubprocessCapability);
-        }
-
         Ok(Self {
             plugin,
             permissions,
             entry_points: EntryPoints {
                 wasm: raw.entry_points.wasm,
                 ui: raw.entry_points.ui,
-                subprocess: raw.entry_points.subprocess,
             },
             runtime: raw.runtime,
             contributions: {

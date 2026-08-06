@@ -4,14 +4,27 @@
   "title": "Plamenix plugin manifest",
   "description": "Schema for `manifest.toml` shipped inside a Plamenix plugin bundle. Mirrors the Rust types in `plamenix_plugin_host::manifest::Manifest`. See `plamenix/docs/plugin-manifest.md` for the prose spec.",
   "type": "object",
-  "required": ["plugin", "entry_points"],
+  "required": [
+    "plugin",
+    "entry_points"
+  ],
   "additionalProperties": false,
   "properties": {
-    "plugin": { "$ref": "#/$defs/plugin" },
-    "permissions": { "$ref": "#/$defs/permissions" },
-    "entry_points": { "$ref": "#/$defs/entry_points" },
-    "runtime": { "$ref": "#/$defs/runtime" },
-    "contributions": { "$ref": "#/$defs/contributions" }
+    "plugin": {
+      "$ref": "#/$defs/plugin"
+    },
+    "permissions": {
+      "$ref": "#/$defs/permissions"
+    },
+    "entry_points": {
+      "$ref": "#/$defs/entry_points"
+    },
+    "runtime": {
+      "$ref": "#/$defs/runtime"
+    },
+    "contributions": {
+      "$ref": "#/$defs/contributions"
+    }
   },
   "$defs": {
     "plugin": {
@@ -69,7 +82,6 @@
         }
       }
     },
-
     "permissions": {
       "type": "object",
       "additionalProperties": false,
@@ -77,20 +89,23 @@
         "required": {
           "type": "array",
           "description": "Capabilities the plugin cannot operate without. The host refuses to honour calls that need these until the user grants them.",
-          "items": { "$ref": "#/$defs/permission" },
+          "items": {
+            "$ref": "#/$defs/permission"
+          },
           "uniqueItems": true,
           "default": []
         },
         "optional": {
           "type": "array",
           "description": "Capabilities the plugin would like but can run without. Surfaced as an opt-in prompt.",
-          "items": { "$ref": "#/$defs/permission" },
+          "items": {
+            "$ref": "#/$defs/permission"
+          },
           "uniqueItems": true,
           "default": []
         }
       }
     },
-
     "permission": {
       "type": "string",
       "description": "Dotted capability string. See `plamenix/docs/capability-model.md` for the grammar. Wildcards are deliberately not supported.",
@@ -109,8 +124,7 @@
             "clipboard.read",
             "clipboard.write",
             "os.notify",
-            "os.open-url",
-            "runtime.subprocess"
+            "os.open-url"
           ]
         },
         {
@@ -143,15 +157,21 @@
         }
       ]
     },
-
     "entry_points": {
       "type": "object",
-      "description": "Bundle-relative paths to plugin halves. At least one of `wasm`, `ui`, or `subprocess` must be present. When `runtime.requires_subprocess` is true, `subprocess` is required.",
+      "description": "Bundle-relative paths to plugin halves. At least one of `wasm` or `ui` must be present.",
       "additionalProperties": false,
       "anyOf": [
-        { "required": ["wasm"] },
-        { "required": ["ui"] },
-        { "required": ["subprocess"] }
+        {
+          "required": [
+            "wasm"
+          ]
+        },
+        {
+          "required": [
+            "ui"
+          ]
+        }
       ],
       "properties": {
         "wasm": {
@@ -163,26 +183,14 @@
           "type": "string",
           "description": "Path to the ESM module exporting React contributions.",
           "pattern": "\\.(m?js|mjs)$"
-        },
-        "subprocess": {
-          "type": "string",
-          "description": "Path to the native executable for subprocess-mode plugins."
         }
       }
     },
-
     "runtime": {
       "type": "object",
       "additionalProperties": false,
-      "properties": {
-        "requires_subprocess": {
-          "type": "boolean",
-          "description": "When true, the plugin runs outside the WASM sandbox via the subprocess activator. Requires `runtime.subprocess` in `permissions.required` and a `subprocess` entry point.",
-          "default": false
-        }
-      }
+      "properties": {}
     },
-
     "contributions": {
       "type": "object",
       "description": "Declarative UI contributions surfaced without needing to run the plugin. The plugin's runtime half may augment them with state.",
@@ -190,15 +198,19 @@
       "properties": {
         "sidebar_panels": {
           "type": "array",
-          "items": { "$ref": "#/$defs/sidebar_panel" },
+          "items": {
+            "$ref": "#/$defs/sidebar_panel"
+          },
           "default": []
         }
       }
     },
-
     "sidebar_panel": {
       "type": "object",
-      "required": ["id", "label"],
+      "required": [
+        "id",
+        "label"
+      ],
       "additionalProperties": false,
       "properties": {
         "id": {

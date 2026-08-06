@@ -82,7 +82,6 @@ ui = "ui.mjs"
 
 [runtime]
 restart_policy = "transient"
-requires_subprocess = false
 
 [permissions]
 required = []

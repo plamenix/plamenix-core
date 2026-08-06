@@ -280,7 +280,6 @@ ui = "ui.mjs"
 
 [runtime]
 restart_policy = "transient"
-requires_subprocess = false
 
 [permissions]
 required = []
@@ -302,7 +301,6 @@ ui = "ui.mjs"
 
 [runtime]
 restart_policy = "transient"
-requires_subprocess = false
 
 [permissions]
 required = []
@@ -313,7 +311,7 @@ optional = []
     #[test]
     fn build_plugin_packs_pre_built_artifacts_when_skip_flags_set() {
         // Pre-stage wasm + ui then build with skip flags so no
-        // subprocess fires. The test exercises the orchestration +
+        // the child process fires. The test exercises the orchestration +
         // archive path, not the cargo/npm side.
         let dir = tempdir().unwrap();
         let plug = dir.path().join("plugin");
@@ -413,7 +411,6 @@ wasm = "plugin.wasm"
 
 [runtime]
 restart_policy = "transient"
-requires_subprocess = false
 
 [permissions]
 required = []

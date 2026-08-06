@@ -420,11 +420,7 @@ fn run_statement(
     let mapped_rows = rows
         .into_iter()
         .map(|row| Row {
-            cells: row
-                .cols
-                .iter()
-                .map(|c| sqltype_to_value(&c.value, bin))
-                .collect(),
+            cells: row.cols.iter().map(|c| column_to_value(c, bin)).collect(),
         })
         .collect();
 
@@ -828,6 +824,36 @@ fn field_type_name(field_type: i64, sub_type: i64, length: i64, dimensions: i64)
     } else {
         base
     }
+}
+
+/// Firebird type codes for the integer family, which is also how
+/// NUMERIC and DECIMAL are stored — as a scaled integer.
+const SQL_SHORT: u32 = 500;
+const SQL_LONG: u32 = 496;
+const SQL_INT64: u32 = 580;
+
+/// True when the column was declared as one of the integer-family
+/// types, whatever the driver ended up handing back as a value.
+fn is_integer_family(raw_type: u32) -> bool {
+    // The nullable flag rides in the low bit of the type code.
+    matches!(raw_type & !1, SQL_SHORT | SQL_LONG | SQL_INT64)
+}
+
+/// Maps one driver column, using its declared type to tell an exact
+/// fixed-point value apart from ordinary text.
+///
+/// Both vendored backends render NUMERIC/DECIMAL as exact decimal text
+/// rather than letting Firebird round it into a double, because
+/// `SqlType` has no fixed-point variant. Text arriving on a column the
+/// engine declared as an integer type can only be that rendering — a
+/// real CHAR/VARCHAR column reports `SQL_TEXT` or `SQL_VARYING`.
+fn column_to_value(column: &rsfbclient::Column, bin: &mut BlobBin) -> ColumnValue {
+    if is_integer_family(column.raw_type) {
+        if let SqlType::Text(s) = &column.value {
+            return ColumnValue::Decimal(s.clone());
+        }
+    }
+    sqltype_to_value(&column.value, bin)
 }
 
 fn sqltype_to_value(value: &SqlType, bin: &mut BlobBin) -> ColumnValue {

@@ -58,6 +58,8 @@ fn cell_to_csv(cell: &ColumnValue, delim: char) -> String {
         ColumnValue::Null => String::new(),
         ColumnValue::Text(v) => quote_csv_field(v, delim),
         ColumnValue::Integer(v) => v.to_string(),
+        // Already exact decimal text; emit it verbatim like any number.
+        ColumnValue::Decimal(v) => v.clone(),
         ColumnValue::Float(v) => v.to_string(),
         ColumnValue::Bool(true) => "true".to_string(),
         ColumnValue::Bool(false) => "false".to_string(),
@@ -70,6 +72,9 @@ fn cell_to_sql_literal(cell: &ColumnValue) -> String {
         ColumnValue::Null => "NULL".to_string(),
         ColumnValue::Text(v) => format!("'{}'", v.replace('\'', "''")),
         ColumnValue::Integer(v) => v.to_string(),
+        // Bare numeric literal: quoting would make Firebird re-parse it
+        // as a string on import.
+        ColumnValue::Decimal(v) => v.clone(),
         ColumnValue::Float(v) => v.to_string(),
         ColumnValue::Bool(true) => "TRUE".to_string(),
         ColumnValue::Bool(false) => "FALSE".to_string(),
@@ -97,6 +102,7 @@ fn cell_to_xml_text(cell: &ColumnValue) -> String {
         ColumnValue::Null => String::new(),
         ColumnValue::Text(v) => v.clone(),
         ColumnValue::Integer(v) => v.to_string(),
+        ColumnValue::Decimal(v) => v.clone(),
         ColumnValue::Float(v) => v.to_string(),
         ColumnValue::Bool(true) => "true".to_string(),
         ColumnValue::Bool(false) => "false".to_string(),
@@ -113,6 +119,9 @@ fn cell_to_json(cell: &ColumnValue) -> serde_json::Value {
         ColumnValue::Null => serde_json::Value::Null,
         ColumnValue::Text(v) => serde_json::Value::String(v.clone()),
         ColumnValue::Integer(v) => serde_json::Value::from(*v),
+        // Text, not a JSON number: the exactness would be lost the
+        // moment any JavaScript consumer called JSON.parse.
+        ColumnValue::Decimal(v) => serde_json::Value::String(v.clone()),
         ColumnValue::Float(v) => serde_json::Number::from_f64(*v)
             .map(serde_json::Value::Number)
             .unwrap_or(serde_json::Value::Null),

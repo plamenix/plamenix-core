@@ -32,7 +32,15 @@ pub enum ColumnValue {
     /// Textual data (CHAR, VARCHAR, BLOB `SUB_TYPE` TEXT).
     Text(String),
     /// 64-bit signed integer (SMALLINT, INTEGER, BIGINT).
-    Integer(i64),
+    ///
+    /// Carried as decimal text: the magnitude is the user's data, and a
+    /// `BIGINT` past 2^53 cannot survive a JSON number. See
+    /// [`plamenix_types::exact_int`].
+    Integer(
+        #[serde(with = "plamenix_types::exact_int")]
+        #[specta(type = String)]
+        i64,
+    ),
     /// Double-precision floating point (FLOAT, DOUBLE PRECISION).
     Float(f64),
     /// Boolean (FB 3.0+ `BOOLEAN`).

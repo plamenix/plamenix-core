@@ -13,6 +13,65 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use uuid::Uuid;
 
+/// Serialises an `i64` as decimal text so it survives the JSON hop into
+/// JavaScript intact.
+///
+/// JavaScript numbers are IEEE-754 doubles, exact only to 2^53. Firebird
+/// `BIGINT` columns and generators span the full 64-bit range, so a value
+/// like `9223372036854775807` arrives as `9223372036854776000` and
+/// `9007199254740993` silently loses its last digit. Use this on any
+/// integer whose magnitude the user controls; leave bounded counters
+/// (page sizes, durations, row counts) as plain numbers.
+///
+/// Deserialisation accepts text or a JSON number, so payloads written
+/// before this module existed still load.
+pub mod exact_int {
+    use serde::{Deserializer, Serializer, de};
+    use std::fmt;
+
+    /// Writes the value as a decimal string.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error raised by the serializer.
+    pub fn serialize<S: Serializer>(value: &i64, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&value.to_string())
+    }
+
+    struct ExactIntVisitor;
+
+    impl de::Visitor<'_> for ExactIntVisitor {
+        type Value = i64;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a 64-bit integer, as decimal text or a JSON number")
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<i64, E> {
+            v.parse()
+                .map_err(|_| E::invalid_value(de::Unexpected::Str(v), &self))
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<i64, E> {
+            Ok(v)
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<i64, E> {
+            i64::try_from(v).map_err(|_| E::invalid_value(de::Unexpected::Unsigned(v), &self))
+        }
+    }
+
+    /// Reads a value written as decimal text, tolerating a JSON number.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the input is neither a 64-bit integer nor
+    /// text parsing to one.
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+        deserializer.deserialize_any(ExactIntVisitor)
+    }
+}
+
 /// Identifier for an active Firebird session.
 ///
 /// A session is created when [`ConnectionConfig`] is attached to a
@@ -192,6 +251,11 @@ pub struct GeneratorInfo {
     /// time. Surfaced by the welcome dashboard and the inline editor in
     /// the schema browser. `0` for a freshly created generator that has
     /// never been incremented.
+    ///
+    /// Carried as decimal text: a Firebird generator is a `BIGINT` and
+    /// spans the full 64-bit range. See [`exact_int`].
+    #[serde(with = "exact_int")]
+    #[specta(type = String)]
     pub current_value: i64,
 }
 
@@ -434,4 +498,52 @@ pub struct StatementInfo {
     pub timestamp: String,
     /// `MON$SQL_TEXT` — the prepared SQL for the statement.
     pub sql_text: String,
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, reason = "tests are exempt per CLAUDE.md")]
+mod exact_int_tests {
+    use super::GeneratorInfo;
+
+    /// The values that motivated carrying these as text: Firebird's
+    /// maximum BIGINT, and the first integer JavaScript cannot represent.
+    const FB_MAX_BIGINT: i64 = 9_223_372_036_854_775_807;
+    const FIRST_INEXACT_IN_JS: i64 = 9_007_199_254_740_993;
+
+    fn round_trip(value: i64) -> i64 {
+        let info = GeneratorInfo {
+            name: "GEN_ID".into(),
+            current_value: value,
+        };
+        let json = serde_json::to_string(&info).expect("serialise");
+        let back: GeneratorInfo = serde_json::from_str(&json).expect("deserialise");
+        back.current_value
+    }
+
+    #[test]
+    fn full_range_bigints_survive_the_json_hop() {
+        for value in [0, -1, FIRST_INEXACT_IN_JS, FB_MAX_BIGINT, i64::MIN] {
+            assert_eq!(round_trip(value), value, "round-tripping {value}");
+        }
+    }
+
+    #[test]
+    fn serialises_as_text_not_a_json_number() {
+        let info = GeneratorInfo {
+            name: "GEN_ID".into(),
+            current_value: FB_MAX_BIGINT,
+        };
+        let json = serde_json::to_string(&info).expect("serialise");
+        assert!(
+            json.contains(r#""currentValue":"9223372036854775807""#),
+            "expected quoted decimal text, got {json}",
+        );
+    }
+
+    #[test]
+    fn payloads_written_before_the_change_still_load() {
+        let legacy = r#"{"name":"GEN_ID","currentValue":42}"#;
+        let info: GeneratorInfo = serde_json::from_str(legacy).expect("deserialise legacy");
+        assert_eq!(info.current_value, 42);
+    }
 }

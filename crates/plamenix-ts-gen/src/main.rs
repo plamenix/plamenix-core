@@ -63,12 +63,18 @@ fn main() -> ExitCode {
         .register::<Profile>()
         .register::<ProfileId>();
 
-    // The JS runtime can hold every Plamenix integer in its native
-    // `number` type (epoch milliseconds, row counts, durations in ms all
-    // sit well within 2^53). Specta is strict by default and forbids
-    // i64/u64 in TS output to avoid silent precision loss; we accept
-    // that loss explicitly and remap to i32 so the printer emits plain
-    // `number` rather than refusing.
+    // Specta forbids i64/u64 in TS output because JS numbers are exact
+    // only to 2^53. The remaining i64s here are bounded by construction
+    // — epoch milliseconds, page counts, durations, ODS versions — so
+    // the loss cannot bite and we remap them to i32 to get a plain
+    // `number` rather than a refusal.
+    //
+    // Integers whose magnitude the user controls are NOT covered by
+    // this: `ColumnValue::Integer` and `GeneratorInfo.current_value`
+    // carry full-range Firebird BIGINTs and are declared
+    // `#[specta(type = String)]` at their definitions, so they reach TS
+    // as exact decimal text. Anything new of that kind belongs there
+    // too, not here.
     let remap = Remapper::new()
         .rule(Primitive::i64.into(), Primitive::i32.into())
         .rule(Primitive::u64.into(), Primitive::i32.into())

@@ -40,6 +40,29 @@ pub const DEFAULT_MAX_TABLES: usize = 16;
 /// 4 memories per Store (wasm32-wasip2 emits 1).
 pub const DEFAULT_MAX_MEMORIES: usize = 4;
 
+// Ceilings for manifest-requested overrides.
+//
+// A plugin declares its own `[runtime.limits]`, so without a ceiling
+// the sandbox is whatever the sandboxed thing asked for — a bundle
+// could request gigabytes of linear memory and the host would grant
+// it. These bound what a manifest may raise a limit to. Lowering is
+// always allowed: a plugin tightening its own budget cannot harm the
+// host.
+//
+// Set well above the defaults so a genuinely heavy plugin can ask for
+// room, and well below what would let one bundle exhaust the machine.
+
+/// Most linear memory a manifest may request: 256 MiB.
+pub const MAX_MEMORY_BYTES_CEILING: usize = 256 * 1024 * 1024;
+/// Most table elements a manifest may request.
+pub const MAX_TABLE_ELEMENTS_CEILING: usize = 100_000;
+/// Most component instances a manifest may request.
+pub const MAX_INSTANCES_CEILING: usize = 256;
+/// Most tables a manifest may request.
+pub const MAX_TABLES_CEILING: usize = 64;
+/// Most memories a manifest may request.
+pub const MAX_MEMORIES_CEILING: usize = 8;
+
 /// Per-plugin resource caps enforced by wasmtime via
 /// [`ResourceLimiter`].
 ///
@@ -81,24 +104,48 @@ impl ResourceLimits {
     }
 
     /// Applies a manifest `[runtime.limits]` override on top of the
-    /// defaults. `None` leaves the corresponding field at its default.
+    /// defaults, clamped to the host ceilings.
+    ///
+    /// The manifest is written by the thing being sandboxed, so a
+    /// requested limit is a request, not a setting. Anything above the
+    /// ceiling is clamped down to it and logged; anything below is
+    /// honoured, since a plugin tightening its own budget cannot harm
+    /// the host. `None` leaves the field at its default.
     #[must_use]
     pub fn from_manifest_override(over: &ResourceLimitsOverride) -> Self {
+        fn clamp(requested: usize, ceiling: usize, field: &'static str) -> usize {
+            if requested > ceiling {
+                tracing::warn!(
+                    field,
+                    requested,
+                    ceiling,
+                    "manifest requested a resource limit above the host ceiling; clamped",
+                );
+                ceiling
+            } else {
+                requested
+            }
+        }
+
         let mut limits = Self::default();
         if let Some(mib) = over.max_memory_mib {
-            limits.max_memory_bytes = mib_to_bytes(mib);
+            limits.max_memory_bytes = clamp(
+                mib_to_bytes(mib),
+                MAX_MEMORY_BYTES_CEILING,
+                "max_memory_bytes",
+            );
         }
         if let Some(n) = over.max_table_elements {
-            limits.max_table_elements = n;
+            limits.max_table_elements = clamp(n, MAX_TABLE_ELEMENTS_CEILING, "max_table_elements");
         }
         if let Some(n) = over.max_instances {
-            limits.max_instances = n;
+            limits.max_instances = clamp(n, MAX_INSTANCES_CEILING, "max_instances");
         }
         if let Some(n) = over.max_tables {
-            limits.max_tables = n;
+            limits.max_tables = clamp(n, MAX_TABLES_CEILING, "max_tables");
         }
         if let Some(n) = over.max_memories {
-            limits.max_memories = n;
+            limits.max_memories = clamp(n, MAX_MEMORIES_CEILING, "max_memories");
         }
         limits
     }
@@ -236,6 +283,71 @@ pub struct ResourceLimitsOverride {
 
 fn mib_to_bytes(mib: usize) -> usize {
     mib.saturating_mul(1024 * 1024)
+}
+
+#[cfg(test)]
+mod ceiling_tests {
+    use super::*;
+
+    fn over(mib: Option<usize>) -> ResourceLimitsOverride {
+        ResourceLimitsOverride {
+            max_memory_mib: mib,
+            ..ResourceLimitsOverride::default()
+        }
+    }
+
+    #[test]
+    fn a_manifest_cannot_raise_a_limit_past_the_ceiling() {
+        // The manifest is written by the sandboxed plugin, so without a
+        // ceiling the sandbox is whatever it asked for.
+        let limits = ResourceLimits::from_manifest_override(&over(Some(4096)));
+        assert_eq!(limits.max_memory_bytes, MAX_MEMORY_BYTES_CEILING);
+    }
+
+    #[test]
+    fn a_request_within_the_ceiling_is_honoured() {
+        let limits = ResourceLimits::from_manifest_override(&over(Some(128)));
+        assert_eq!(limits.max_memory_bytes, 128 * 1024 * 1024);
+    }
+
+    #[test]
+    fn lowering_a_limit_is_always_allowed() {
+        // Tightening its own budget cannot harm the host.
+        let limits = ResourceLimits::from_manifest_override(&over(Some(1)));
+        assert_eq!(limits.max_memory_bytes, 1024 * 1024);
+    }
+
+    #[test]
+    fn an_absent_field_keeps_the_default() {
+        let limits = ResourceLimits::from_manifest_override(&over(None));
+        assert_eq!(limits.max_memory_bytes, DEFAULT_MAX_MEMORY_BYTES);
+    }
+
+    #[test]
+    fn every_count_limit_is_clamped_too() {
+        let limits = ResourceLimits::from_manifest_override(&ResourceLimitsOverride {
+            max_memory_mib: None,
+            max_table_elements: Some(usize::MAX),
+            max_instances: Some(usize::MAX),
+            max_tables: Some(usize::MAX),
+            max_memories: Some(usize::MAX),
+        });
+        assert_eq!(limits.max_table_elements, MAX_TABLE_ELEMENTS_CEILING);
+        assert_eq!(limits.max_instances, MAX_INSTANCES_CEILING);
+        assert_eq!(limits.max_tables, MAX_TABLES_CEILING);
+        assert_eq!(limits.max_memories, MAX_MEMORIES_CEILING);
+    }
+
+    #[test]
+    fn every_ceiling_leaves_room_above_its_default() {
+        // A ceiling at or below the default would make the override
+        // path pointless.
+        assert!(MAX_MEMORY_BYTES_CEILING > DEFAULT_MAX_MEMORY_BYTES);
+        assert!(MAX_TABLE_ELEMENTS_CEILING > DEFAULT_MAX_TABLE_ELEMENTS);
+        assert!(MAX_INSTANCES_CEILING > DEFAULT_MAX_INSTANCES);
+        assert!(MAX_TABLES_CEILING > DEFAULT_MAX_TABLES);
+        assert!(MAX_MEMORIES_CEILING > DEFAULT_MAX_MEMORIES);
+    }
 }
 
 #[cfg(test)]

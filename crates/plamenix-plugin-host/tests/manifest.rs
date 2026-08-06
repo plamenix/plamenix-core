@@ -197,13 +197,13 @@ ui = "ui.mjs"
 #[test]
 fn permission_set_grants_lookup_covers_both_buckets() {
     let manifest = Manifest::parse(VALID_MANIFEST).unwrap();
-    assert!(manifest.permissions.grants(&Permission::DbReadAny));
+    assert!(manifest.permissions.declares(&Permission::DbReadAny));
     assert!(
         manifest
             .permissions
-            .grants(&Permission::NetHttpsHost("api.example.com".into()))
+            .declares(&Permission::NetHttpsHost("api.example.com".into()))
     );
-    assert!(!manifest.permissions.grants(&Permission::DbWriteAny));
+    assert!(!manifest.permissions.declares(&Permission::DbWriteAny));
 }
 
 #[test]

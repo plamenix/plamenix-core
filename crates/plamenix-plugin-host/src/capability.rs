@@ -271,9 +271,16 @@ pub struct PermissionSet {
 }
 
 impl PermissionSet {
-    /// Returns `true` when either bucket contains the given capability.
+    /// Returns `true` when the manifest declares this capability, in
+    /// either the required or the optional bucket.
+    ///
+    /// This asks what the plugin *asked for*, not what the user has
+    /// approved — the two are easy to confuse and the distinction is
+    /// load-bearing. A user grant is only meaningful for a capability
+    /// the manifest declared, so the grant path checks this first and
+    /// refuses anything outside the declared set.
     #[must_use]
-    pub fn grants(&self, permission: &Permission) -> bool {
+    pub fn declares(&self, permission: &Permission) -> bool {
         self.required.iter().any(|g| &g.capability == permission)
             || self.optional.iter().any(|g| &g.capability == permission)
     }

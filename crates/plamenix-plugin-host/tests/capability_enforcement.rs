@@ -62,9 +62,9 @@ optional = []
 #[test]
 fn empty_permission_set_grants_nothing() {
     let set = PermissionSet::default();
-    assert!(!set.grants(&Permission::ClipboardWrite));
-    assert!(!set.grants(&Permission::DbReadAny));
-    assert!(!set.grants(&Permission::NetHttps));
+    assert!(!set.declares(&Permission::ClipboardWrite));
+    assert!(!set.declares(&Permission::DbReadAny));
+    assert!(!set.declares(&Permission::NetHttps));
 }
 
 #[test]
@@ -85,10 +85,10 @@ required = [{ capability = "db.read.any" }]
 optional = [{ capability = "net.https" }]
 "#;
     let m = Manifest::parse(manifest).unwrap();
-    assert!(m.permissions.grants(&Permission::DbReadAny));
-    assert!(m.permissions.grants(&Permission::NetHttps));
+    assert!(m.permissions.declares(&Permission::DbReadAny));
+    assert!(m.permissions.declares(&Permission::NetHttps));
     // Not declared, even though we asked for db.read.any.
-    assert!(!m.permissions.grants(&Permission::DbWriteAny));
+    assert!(!m.permissions.declares(&Permission::DbWriteAny));
 }
 
 #[tokio::test(flavor = "multi_thread")]

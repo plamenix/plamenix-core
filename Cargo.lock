@@ -2211,6 +2211,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "url",
  "wasmtime",
  "wasmtime-wasi",
  "zip",

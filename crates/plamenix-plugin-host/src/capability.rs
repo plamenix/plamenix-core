@@ -46,6 +46,26 @@ pub enum Permission {
     ClipboardWrite,
     OsNotify,
     OsOpenUrl,
+    /// Read this plugin's own settings.
+    SettingsRead,
+    /// Write this plugin's own settings.
+    SettingsWrite,
+    /// Invoke a host command.
+    CommandInvoke,
+    /// Publish on an event channel outside the plugin's own namespace.
+    /// A plugin never needs this to emit under `<its-own-id>:`.
+    EventPublish(String),
+    /// Learn which session the host is currently acting for.
+    DbSessionContextRead,
+    /// Read keyring entries under one service name.
+    ///
+    /// Orthogonal to [`Self::AuthOsKeyring`], which answers "may this
+    /// plugin reach the OS keyring at all". This one scopes which
+    /// entries. Both are required.
+    SecretsReadService(String),
+    /// Write keyring entries under one service name. See
+    /// [`Self::SecretsReadService`] for why there are two axes.
+    SecretsWriteService(String),
 }
 
 /// Whitelisted logical directories that plugins may read or write.
@@ -160,6 +180,19 @@ impl Permission {
             ["clipboard", "write"] => Ok(Self::ClipboardWrite),
             ["os", "notify"] => Ok(Self::OsNotify),
             ["os", "open-url"] => Ok(Self::OsOpenUrl),
+            ["settings", "read"] => Ok(Self::SettingsRead),
+            ["settings", "write"] => Ok(Self::SettingsWrite),
+            ["command", "invoke"] => Ok(Self::CommandInvoke),
+            ["event", "publish", channel @ ..] if !channel.is_empty() => {
+                Ok(Self::EventPublish(channel.join(".")))
+            }
+            ["db", "session", "context", "read"] => Ok(Self::DbSessionContextRead),
+            ["secrets", "read", "service", service @ ..] if !service.is_empty() => {
+                Ok(Self::SecretsReadService(service.join(".")))
+            }
+            ["secrets", "write", "service", service @ ..] if !service.is_empty() => {
+                Ok(Self::SecretsWriteService(service.join(".")))
+            }
             _ => Err(PluginError::InvalidCapability(
                 raw.to_owned(),
                 "no matching capability rule",
@@ -191,6 +224,13 @@ impl fmt::Display for Permission {
             Self::ClipboardWrite => f.write_str("clipboard.write"),
             Self::OsNotify => f.write_str("os.notify"),
             Self::OsOpenUrl => f.write_str("os.open-url"),
+            Self::SettingsRead => f.write_str("settings.read"),
+            Self::SettingsWrite => f.write_str("settings.write"),
+            Self::CommandInvoke => f.write_str("command.invoke"),
+            Self::EventPublish(channel) => write!(f, "event.publish.{channel}"),
+            Self::DbSessionContextRead => f.write_str("db.session.context.read"),
+            Self::SecretsReadService(service) => write!(f, "secrets.read.service.{service}"),
+            Self::SecretsWriteService(service) => write!(f, "secrets.write.service.{service}"),
         }
     }
 }

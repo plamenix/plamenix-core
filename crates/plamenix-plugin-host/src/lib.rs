@@ -35,6 +35,7 @@ pub mod dispatch;
 pub mod epoch;
 pub mod error;
 pub mod event_bus;
+pub mod gate;
 pub mod host;
 pub mod host_impl;
 pub mod instance;
@@ -64,6 +65,7 @@ pub use epoch::{
 };
 pub use error::PluginError;
 pub use event_bus::{EventBus, MatchedSubscriber, matches_pattern, tokenise_pattern};
+pub use gate::{Denial, Guard};
 pub use host::PluginHost;
 pub use host_impl::{HostState, LogLevel, LogSink, RecordedLog, SessionSlot, register_host};
 pub use instance::{InstanceRegistry, PluginInstance};

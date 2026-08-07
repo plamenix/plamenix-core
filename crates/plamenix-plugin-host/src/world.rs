@@ -115,7 +115,8 @@ impl PluginWorld {
             Permission::DbReadAny
             | Permission::DbReadTable(_)
             | Permission::DbSchemaList
-            | Permission::DbSchemaDescribe => Self::DbReader,
+            | Permission::DbSchemaDescribe
+            | Permission::DbSessionContextRead => Self::DbReader,
             // `db-write` interface.
             Permission::DbWriteAny
             | Permission::DbWriteTable(_)
@@ -136,11 +137,28 @@ impl PluginWorld {
             | Permission::FsWriteDir(_)
             | Permission::ClipboardRead
             | Permission::ClipboardWrite
-            | Permission::OsOpenUrl => Self::Integrated,
+            | Permission::OsOpenUrl
+            | Permission::SettingsRead
+            | Permission::SettingsWrite
+            | Permission::CommandInvoke
+            | Permission::EventPublish(_) => Self::Integrated,
             // Desktop-only orthogonal capabilities.
-            Permission::AuthOsKeyring(_) | Permission::OsNotify => Self::IntegratedDesktop,
+            Permission::AuthOsKeyring(_)
+            | Permission::OsNotify
+            | Permission::SecretsReadService(_)
+            | Permission::SecretsWriteService(_) => Self::IntegratedDesktop,
         };
         self.tier() >= tier.tier()
+    }
+
+    /// Whether this world includes everything `other` exposes.
+    ///
+    /// Mirrors the `include` chain in `wit/plamenix.wit`, and is what
+    /// [`crate::link::register_for_world`] asks when deciding which
+    /// interfaces to put in a plugin's linker.
+    #[must_use]
+    pub const fn includes(self, other: Self) -> bool {
+        self.tier() >= other.tier()
     }
 
     /// Position in the `include` chain. Higher includes lower.

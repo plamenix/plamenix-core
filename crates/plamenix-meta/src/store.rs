@@ -201,6 +201,28 @@ impl MetaStore {
         &self.driver
     }
 
+    /// Runs a statement that returns nothing.
+    pub(crate) async fn exec(&self, sql: String) -> Result<(), MetaError> {
+        self.driver
+            .execute(self.session, sql)
+            .await
+            .map(|_| ())
+            .map_err(|err| MetaError::Driver(err.to_string()))
+    }
+
+    /// Runs a statement and reports how many rows it changed.
+    pub(crate) async fn affected(&self, sql: String) -> Result<u64, MetaError> {
+        let result = self
+            .driver
+            .execute(self.session, sql)
+            .await
+            .map_err(|err| MetaError::Driver(err.to_string()))?;
+        Ok(match result {
+            plamenix_db::QueryResult::Affected { rows } => rows,
+            plamenix_db::QueryResult::Rows { rows, .. } => rows.len() as u64,
+        })
+    }
+
     /// Where the database lives.
     #[must_use]
     pub fn path(&self) -> &Path {
@@ -208,7 +230,7 @@ impl MetaStore {
     }
 }
 
-fn now_millis() -> i64 {
+pub(crate) fn now_millis() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
@@ -221,7 +243,7 @@ fn now_millis() -> i64 {
 /// that can be corrupted by the thing it is auditing is not an audit
 /// log, and a token name is one config edit away from containing a
 /// quote.
-fn quote(value: Option<&str>) -> String {
+pub(crate) fn quote(value: Option<&str>) -> String {
     match value {
         None => "NULL".to_owned(),
         Some(text) => format!("'{}'", text.replace('\'', "''")),

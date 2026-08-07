@@ -38,8 +38,11 @@
 
 #![forbid(unsafe_code)]
 
+mod grants;
+mod history;
 mod schema;
 mod store;
 
+pub use history::{HistoryEntry, NewHistoryEntry};
 pub use schema::SCHEMA_STATEMENTS;
 pub use store::{AuditEntry, MetaError, MetaStore};

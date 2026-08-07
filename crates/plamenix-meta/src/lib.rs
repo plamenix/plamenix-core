@@ -43,6 +43,6 @@ mod history;
 mod schema;
 mod store;
 
-pub use history::{HistoryEntry, NewHistoryEntry};
+pub use history::NewHistoryEntry;
 pub use schema::SCHEMA_STATEMENTS;
 pub use store::{AuditEntry, MetaError, MetaStore};

@@ -345,7 +345,7 @@ pub struct TestConnectionResult {
 #[derive(Clone, Debug, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryEntry {
-    /// Auto-incrementing primary key from the local `SQLite` store.
+    /// Identity column from Plamenix's own metadata database.
     pub id: i64,
     /// Profile this entry belongs to.
     pub profile_id: String,

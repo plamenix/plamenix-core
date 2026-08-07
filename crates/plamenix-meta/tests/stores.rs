@@ -192,3 +192,97 @@ async fn grants_are_readable_per_plugin_and_all_at_once() {
     assert!(store.granted_for("a").await.unwrap().is_empty());
     assert_eq!(store.granted_for("b").await.unwrap(), ["clipboard.read"]);
 }
+
+#[tokio::test]
+async fn history_is_trimmed_to_its_cap() {
+    // Without a cap the table grows one row per statement, forever. The
+    // desktop shell passed a limit to its SQLite store; dropping it in
+    // the move would have been an unbounded table nobody noticed until
+    // it was large.
+    let dir = tempfile::tempdir().unwrap();
+    let Some(store) = store(dir.path()).await else {
+        println!("SKIPPED: bundled fbclient not found");
+        return;
+    };
+
+    for i in 0..10 {
+        store.record_history(&entry("p1", "SELECT 1", i)).await.unwrap();
+    }
+    store.trim_history("p1", 4).await.unwrap();
+
+    let listed = store.list_history("p1", 100).await.unwrap();
+    assert_eq!(listed.len(), 4, "only the newest should survive");
+    assert_eq!(listed[0].executed_at, 9, "and the newest should be kept");
+}
+
+#[tokio::test]
+async fn trimming_below_the_cap_removes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(store) = store(dir.path()).await else {
+        println!("SKIPPED: bundled fbclient not found");
+        return;
+    };
+    store.record_history(&entry("p1", "SELECT 1", 1)).await.unwrap();
+    assert_eq!(store.trim_history("p1", 50).await.unwrap(), 0);
+    assert_eq!(store.list_history("p1", 10).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn history_breaks_same_millisecond_ties_by_id() {
+    // Statements run faster than `EXECUTED_AT` resolves to, so a batch
+    // of five recorded in one millisecond is ordinary rather than a
+    // corner case. Without an `ID` tiebreak the engine may return them
+    // in any order, which showed up as the retention cap appearing to
+    // drop the newest entry: the cap kept the right rows and the list
+    // reported a different set as newest.
+    let dir = tempfile::tempdir().unwrap();
+    let Some(store) = store(dir.path()).await else {
+        println!("SKIPPED: bundled fbclient not found");
+        return;
+    };
+
+    for n in 1..=5 {
+        store
+            .record_history(&entry("tie", &format!("SELECT {n}"), 1_000))
+            .await
+            .unwrap();
+    }
+
+    let listed = store.list_history("tie", 10).await.unwrap();
+    let sqls: Vec<_> = listed.iter().map(|e| e.sql.as_str()).collect();
+    assert_eq!(
+        sqls,
+        ["SELECT 5", "SELECT 4", "SELECT 3", "SELECT 2", "SELECT 1"],
+        "insertion order must decide when the timestamps are equal"
+    );
+
+    // And `FIRST n` must cut the tie at the same place the trim does,
+    // or the panel shows rows the cap is about to delete.
+    let top = store.list_history("tie", 3).await.unwrap();
+    let top_sqls: Vec<_> = top.iter().map(|e| e.sql.as_str()).collect();
+    assert_eq!(top_sqls, ["SELECT 5", "SELECT 4", "SELECT 3"]);
+}
+
+#[tokio::test]
+async fn trim_keeps_the_newest_within_one_millisecond() {
+    // The cap and the list have to agree. They order by different
+    // clauses in different statements, so agreement is a thing to
+    // assert rather than assume.
+    let dir = tempfile::tempdir().unwrap();
+    let Some(store) = store(dir.path()).await else {
+        println!("SKIPPED: bundled fbclient not found");
+        return;
+    };
+
+    for n in 1..=5 {
+        store
+            .record_history(&entry("cap", &format!("SELECT {n}"), 2_000))
+            .await
+            .unwrap();
+        store.trim_history("cap", 3).await.unwrap();
+    }
+
+    let listed = store.list_history("cap", 10).await.unwrap();
+    let sqls: Vec<_> = listed.iter().map(|e| e.sql.as_str()).collect();
+    assert_eq!(sqls, ["SELECT 5", "SELECT 4", "SELECT 3"]);
+}

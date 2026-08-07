@@ -26,7 +26,7 @@ wit_bindgen::generate!({
     world: "plugin-minimal",
 });
 
-use crate::exports::plamenix::plugin::plugin::{Activation, Guest};
+use crate::exports::plamenix::plugin::plugin::{Activation, Guest, Interception};
 use crate::plamenix::plugin::host::{LogLevel, log};
 
 struct MisbehavingPlugin;
@@ -80,6 +80,31 @@ impl Guest for MisbehavingPlugin {
             _ => {
                 log(LogLevel::Info, "misbehaving plugin behaved");
             }
+        }
+    }
+
+    /// Misbehaves inside an interceptor, which is the worse place to do
+    /// it: an event handler that hangs delays a notification, but an
+    /// interceptor that hangs blocks the user's operation.
+    ///
+    /// Selected by extension point, mirroring `handle_event`'s use of
+    /// the topic.
+    fn intercept(point: String, _context_json: String) -> Interception {
+        match point.as_str() {
+            "query.executing" => unreachable!("this plugin traps in interceptors on purpose"),
+            "cell.committing" => {
+                let mut spin: u64 = 0;
+                loop {
+                    spin = spin.wrapping_add(1);
+                    core::hint::black_box(spin);
+                }
+            }
+            // A cancel with an empty reason. The host refuses this at
+            // manifest validation, but a plugin can still return one at
+            // runtime, and "blocked, no reason given" must not reach
+            // the user.
+            "row.deleting" => Interception::Cancel(String::new()),
+            _ => Interception::Proceed,
         }
     }
 }

@@ -88,6 +88,10 @@ pub fn load(
 
     let component = match manifest.entry_points.wasm.as_ref() {
         Some(rel) => {
+            // Only wasm halves get linked, so only they care which
+            // world was declared. A UI-only plugin may name any world
+            // in the contract without the host having to satisfy it.
+            crate::world::check_linkable(manifest.plugin.world_tier)?;
             let wasm_path = bundle_dir.join(rel);
             if !wasm_path.exists() {
                 return Err(PluginError::WasmMissing(wasm_path));

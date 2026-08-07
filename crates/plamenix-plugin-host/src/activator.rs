@@ -255,3 +255,46 @@ pub fn register_event_subscriptions(
 pub fn unregister_event_subscriptions(bus: &Arc<EventBus>, plugin_id: &str) -> usize {
     bus.unsubscribe_by_plugin(plugin_id)
 }
+
+/// Registers every `[[contributions.interceptors]]` entry against the
+/// supplied registry. The event-bus pair above, for the control
+/// surface.
+///
+/// Kept separate from activation itself for the same reason
+/// subscriptions are: a plugin whose `activate` fails must not end up
+/// wired into the chain, and the caller is the one that knows whether
+/// activation succeeded.
+///
+/// # Errors
+///
+/// [`PluginError::Runtime`] when the registry lock is poisoned.
+pub fn register_interceptors(
+    registry: &Arc<crate::interceptor::InterceptorRegistry>,
+    staged: &StagedPlugin,
+) -> Result<usize, PluginError> {
+    let plugin_id = &staged.manifest.plugin.id;
+    let mut count = 0;
+    for entry in &staged.manifest.contributions.interceptors {
+        registry.register(crate::interceptor::InterceptorRegistration {
+            plugin_id: plugin_id.clone(),
+            point: entry.point,
+            priority: entry.priority,
+            purpose: entry.purpose.clone(),
+        })?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// Drops every interceptor registration belonging to `plugin_id`.
+/// Idempotent.
+///
+/// # Errors
+///
+/// [`PluginError::Runtime`] when the registry lock is poisoned.
+pub fn unregister_interceptors(
+    registry: &Arc<crate::interceptor::InterceptorRegistry>,
+    plugin_id: &str,
+) -> Result<(), PluginError> {
+    registry.unregister_by_plugin(plugin_id)
+}

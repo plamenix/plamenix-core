@@ -38,6 +38,7 @@ pub mod event_bus;
 pub mod host;
 pub mod host_impl;
 pub mod instance;
+pub mod interceptor;
 pub mod limits;
 pub mod loader;
 pub mod manifest;
@@ -45,10 +46,12 @@ pub mod plx;
 pub mod signing;
 pub mod supervisor;
 pub mod trap;
+pub mod world;
 
 pub use activator::{
     ActivationOutcome, activate, activate_into_registry, activate_with_state,
-    register_event_subscriptions, unregister_event_subscriptions,
+    register_event_subscriptions, register_interceptors, unregister_event_subscriptions,
+    unregister_interceptors,
 };
 pub use capability::{LogicalDir, OsKeyring, Permission, PermissionGrant, PermissionSet};
 pub use concurrency::{CallPermit, InFlightAcquireError, InFlightLimiter, MAX_IN_FLIGHT_DEFAULT};
@@ -63,6 +66,10 @@ pub use event_bus::{EventBus, MatchedSubscriber, matches_pattern, tokenise_patte
 pub use host::PluginHost;
 pub use host_impl::{HostState, LogLevel, LogSink, RecordedLog, SessionSlot, register_host};
 pub use instance::{InstanceRegistry, PluginInstance};
+pub use interceptor::{
+    ExtensionPoint, Interception, InterceptorRegistration, InterceptorRegistry, MAX_PRIORITY,
+    MIN_PLUGIN_PRIORITY, Verdict, intercept_one, intercept_one_supervised, run_chain,
+};
 pub use limits::{
     DEFAULT_MAX_INSTANCES, DEFAULT_MAX_MEMORIES, DEFAULT_MAX_MEMORY_BYTES,
     DEFAULT_MAX_TABLE_ELEMENTS, DEFAULT_MAX_TABLES, ResourceLimits, ResourceLimitsBuilder,
@@ -87,3 +94,6 @@ pub use supervisor::{
     RestartDecision, Supervisor,
 };
 pub use trap::{CallFailure, FailureKind};
+pub use world::{
+    PluginWorld, check_linkable, check_permissions, check_targets, parse_world_identifier,
+};

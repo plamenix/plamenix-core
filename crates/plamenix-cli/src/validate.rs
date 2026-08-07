@@ -141,6 +141,11 @@ name = "Validate Test"
 version = "{version}"
 plamenix_min_version = ">=1.0.0-beta"
 plugin_api = "1.0"
+# Tier 3, because the permission lists below reach into `db` and `net`.
+# The host now refuses a capability the declared world has no import
+# for, so a fixture that leaves this at the default `plugin-minimal`
+# cannot request either.
+world = "plamenix:plugin@1.0.0/plugin-integrated"
 
 [entry_points]
 ui = "ui.mjs"

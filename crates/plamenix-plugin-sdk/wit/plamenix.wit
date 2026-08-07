@@ -75,6 +75,49 @@ interface plugin {
     /// so a plugin's component shape stays stable regardless of which
     /// subscriptions it registers at install time.
     handle-event: func(topic: string, payload: string);
+
+    /// What an interceptor wants the host to do with the operation it
+    /// was consulted about.
+    variant interception {
+        /// Let the operation proceed with the context unchanged.
+        proceed,
+        /// Let it proceed, but against this JSON context instead of the
+        /// one the plugin was handed. Interceptors later in the chain
+        /// see the replacement, and so does the host.
+        replace(string),
+        /// Refuse the operation. The payload is the reason shown to the
+        /// user, and it is not optional: a refusal nobody can explain
+        /// is a support ticket by construction.
+        cancel(string),
+    }
+
+    /// Synchronous middleware, called BEFORE an operation commits.
+    ///
+    /// The host calls this once per extension point the plugin
+    /// registered for in `[[contributions.interceptors]]`, in the
+    /// priority order the chain resolved, and honours what comes back.
+    /// This is the control surface; `handle-event` is the notification
+    /// one. An event subscriber cannot refuse anything.
+    ///
+    /// `point` is the extension point (`query.executing`,
+    /// `cell.committing`, …) and `context-json` is that point's context
+    /// encoded as JSON. Dispatching on a string rather than exporting
+    /// one function per point is deliberate: it mirrors `handle-event`,
+    /// and it keeps "add an extension point" a SemVer-minor change to
+    /// the host instead of a breaking change to this contract.
+    ///
+    /// Interceptors block the user. The host applies the interactive
+    /// deadline to this call and the shell bounds the whole chain at
+    /// 500ms; a plugin that overruns or traps is skipped and the
+    /// operation proceeds without it, because an IDE that stops
+    /// responding is worse than one that missed a policy check. Slow
+    /// work belongs on the event bus.
+    ///
+    /// Plugins that register no interceptors ship a body that returns
+    /// `proceed`; the export is mandatory at the WIT level for the same
+    /// reason `handle-event` is — a component's shape must not depend
+    /// on what it registered at install time.
+    intercept: func(point: string, context-json: string) -> interception;
 }
 
 // ─────────────────────────────────────────────────────────────────────

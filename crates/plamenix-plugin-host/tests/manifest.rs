@@ -14,6 +14,7 @@ name = "CSV Exporter"
 version = "1.0.0"
 plamenix_min_version = ">=1.0.0-beta"
 plugin_api = "1.0"
+world = "plamenix:plugin@1.0.0/plugin-integrated"
 author = "Example <dev@example.org>"
 license = "MIT OR Apache-2.0"
 
@@ -78,6 +79,7 @@ name = "X"
 version = "1.0.0"
 plamenix_min_version = ">=1.0.0-beta"
 plugin_api = "1.0"
+world = "plamenix:plugin@1.0.0/plugin-integrated"
 
 [permissions]
 required = ["mystery.deep.access"]
@@ -117,6 +119,7 @@ name = "Detailed"
 version = "1.0.0"
 plamenix_min_version = ">=1.0.0-beta"
 plugin_api = "1.0"
+world = "plamenix:plugin@1.0.0/plugin-integrated"
 
 [permissions]
 required = [
@@ -149,6 +152,7 @@ name = "Mixed"
 version = "1.0.0"
 plamenix_min_version = ">=1.0.0-beta"
 plugin_api = "1.0"
+world = "plamenix:plugin@1.0.0/plugin-integrated"
 
 [permissions]
 required = [
@@ -180,6 +184,7 @@ name = "Empty"
 version = "1.0.0"
 plamenix_min_version = ">=1.0.0-beta"
 plugin_api = "1.0"
+world = "plamenix:plugin@1.0.0/plugin-integrated"
 
 [permissions]
 required = [{ capability = "db.schema.list", purpose = "" }]

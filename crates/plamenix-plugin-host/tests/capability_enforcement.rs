@@ -76,6 +76,11 @@ name = "Granted"
 version = "1.0.0"
 plamenix_min_version = ">=1.0.0-beta"
 plugin_api = "1.0"
+# `net.https` is a tier-3 import, so the world has to be the one that
+# exposes it. This used to say nothing and default to `plugin-minimal`,
+# which exposes neither capability below — the host granted them both
+# anyway, which is the gap the world cross-check closes.
+world = "plamenix:plugin@1.0.0/plugin-integrated"
 
 [entry_points]
 wasm = "plugin.wasm"

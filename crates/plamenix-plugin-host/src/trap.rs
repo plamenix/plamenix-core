@@ -31,12 +31,14 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
 use wasmtime::Trap;
 
 /// Why a call into a plugin ended early.
 ///
 /// The host branches on this; [`CallFailure::message`] is for humans.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum FailureKind {
     /// The call exceeded its epoch deadline and the host interrupted
     /// it. The plugin did nothing illegal — it just took too long.
@@ -63,7 +65,8 @@ impl fmt::Display for FailureKind {
 
 /// A failed call into a plugin: what kind of failure, and the whole
 /// error chain that described it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CallFailure {
     /// What sort of failure this was.
     pub kind: FailureKind,

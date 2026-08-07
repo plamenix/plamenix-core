@@ -121,6 +121,42 @@ pub struct Contributions {
     /// matched subscription.
     #[serde(default)]
     pub event_subscriptions: Vec<String>,
+    /// Extension points the plugin wants to be consulted on before the
+    /// operation commits. Unlike an event subscription, an entry here
+    /// lets the plugin refuse or rewrite what the user asked for, so
+    /// each one is validated against the closed set of points, against
+    /// the priority band reserved for plugins, and against the
+    /// capability the point requires — see
+    /// [`crate::interceptor::ExtensionPoint`].
+    #[serde(default)]
+    pub interceptors: Vec<InterceptorContribution>,
+}
+
+/// One `[[contributions.interceptors]]` entry.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InterceptorContribution {
+    /// Which point, as a wire name (`query.executing`, …).
+    pub extension_point: String,
+    /// Resolved form of [`extension_point`](Self::extension_point).
+    /// Populated at parse time so nothing downstream re-parses it.
+    #[serde(skip_deserializing, default = "default_extension_point")]
+    pub point: crate::interceptor::ExtensionPoint,
+    /// Lower runs earlier. Defaults to
+    /// [`MIN_PLUGIN_PRIORITY`](crate::interceptor::MIN_PLUGIN_PRIORITY).
+    #[serde(default = "default_interceptor_priority")]
+    pub priority: u16,
+    /// Author's rationale, shown in the install dialog and permissions
+    /// panel. Optional, like a permission's purpose.
+    #[serde(default)]
+    pub purpose: Option<String>,
+}
+
+const fn default_interceptor_priority() -> u16 {
+    crate::interceptor::MIN_PLUGIN_PRIORITY
+}
+
+const fn default_extension_point() -> crate::interceptor::ExtensionPoint {
+    crate::interceptor::ExtensionPoint::QueryExecuting
 }
 
 /// One sidebar-panel contribution.
@@ -134,6 +170,66 @@ pub struct SidebarPanel {
     /// Optional Lucide-react icon name. The host resolves the string
     /// to a concrete component; unknown icons fall back to a default.
     pub icon: Option<String>,
+}
+
+/// Enforces the priority band and the capability gate for one
+/// interceptor contribution.
+///
+/// The capability gate is the load-bearing half. An interceptor sees
+/// the context of the operation it intercepts, so registering for
+/// `cell.committing` without holding a write capability would be a way
+/// to read every value the user edits while asking for nothing — the
+/// permissions dialog would show an empty list. Requiring the
+/// capability the point's context exposes keeps what the plugin can
+/// observe in step with what the user approved.
+///
+/// Mapping is from the table in `docs/plugin-interceptors.md`.
+fn validate_interceptor(
+    entry: &InterceptorContribution,
+    permissions: &PermissionSet,
+) -> Result<(), PluginError> {
+    use crate::interceptor::{MAX_PRIORITY, MIN_PLUGIN_PRIORITY};
+
+    if entry.priority < MIN_PLUGIN_PRIORITY || entry.priority > MAX_PRIORITY {
+        return Err(PluginError::InvalidManifest(format!(
+            "contributions.interceptors priority {} for `{}` is outside {MIN_PLUGIN_PRIORITY}..={MAX_PRIORITY}; below {MIN_PLUGIN_PRIORITY} is reserved for the host's own interceptors, which plugins must not preempt",
+            entry.priority, entry.extension_point,
+        )));
+    }
+
+    // `editor.saving` is deliberately absent: the editor buffer is a
+    // plugin-shared surface and holds no database content, so gating it
+    // would be ceremony rather than protection.
+    let accepted: &[Permission] = match entry.point {
+        crate::interceptor::ExtensionPoint::EditorSaving => return Ok(()),
+        // Read is enough for these three: seeing a statement, an export
+        // request, or a connection config does not imply changing one.
+        crate::interceptor::ExtensionPoint::QueryExecuting
+        | crate::interceptor::ExtensionPoint::ExportStarting
+        | crate::interceptor::ExtensionPoint::ConnectionOpening => {
+            &[Permission::DbReadAny, Permission::DbWriteAny]
+        }
+        // These four sit in front of a write, so read access is not
+        // enough to be consulted about them.
+        crate::interceptor::ExtensionPoint::CellCommitting
+        | crate::interceptor::ExtensionPoint::RowInserting
+        | crate::interceptor::ExtensionPoint::RowDeleting
+        | crate::interceptor::ExtensionPoint::SchemaActionApplying => {
+            &[Permission::DbWriteAny, Permission::DbDdlAny]
+        }
+    };
+
+    if accepted
+        .iter()
+        .any(|permission| permissions.declares(permission))
+    {
+        return Ok(());
+    }
+
+    Err(PluginError::InvalidManifest(format!(
+        "contributions.interceptors entry `{}` requires one of {accepted:?} in [permissions]; an interceptor sees the context of every operation it intercepts, so it must ask for the capability that context exposes",
+        entry.extension_point,
+    )))
 }
 
 /// `[plugin]` table — identity and host-compatibility metadata.
@@ -156,6 +252,14 @@ pub struct PluginMetadata {
     /// surface are unreachable even if granted. Defaults to
     /// `plamenix:plugin@1.0.0/plugin-minimal`.
     pub world: String,
+    /// The capability tier [`world`](Self::world) resolved to.
+    ///
+    /// Kept alongside the raw string rather than replacing it: the
+    /// string is what the author wrote and what round-trips back out,
+    /// while this is what the host enforces against. Resolved once at
+    /// parse time so no later code has to re-parse and possibly
+    /// disagree.
+    pub world_tier: crate::world::PluginWorld,
     /// Editions the plugin runs on. Host refuses to install when the
     /// list excludes the current edition. Defaults to `[Desktop, Web]`.
     pub targets: Vec<Edition>,
@@ -368,7 +472,7 @@ impl TryFrom<RawManifest> for Manifest {
             .plugin
             .world
             .unwrap_or_else(|| DEFAULT_WORLD.to_string());
-        validate_world_identifier(&world)?;
+        let world_tier = crate::world::parse_world_identifier(&world)?;
 
         let targets = match raw.plugin.targets {
             Some(tokens) if tokens.is_empty() => {
@@ -403,6 +507,7 @@ impl TryFrom<RawManifest> for Manifest {
                 .map_err(|err: semver::Error| PluginError::InvalidManifest(err.to_string()))?,
             plugin_api: raw.plugin.plugin_api,
             world,
+            world_tier,
             targets,
             restart_policy,
             author: raw.plugin.author,
@@ -426,6 +531,32 @@ impl TryFrom<RawManifest> for Manifest {
 
         let permissions = PermissionSet { required, optional };
 
+        // The WIT header promises a plugin only sees the imports its
+        // declared world exposes. Granting a capability the world has
+        // no import for is not a smaller grant — it is a prompt the
+        // user is asked to approve for nothing.
+        crate::world::check_permissions(world_tier, &permissions)?;
+        crate::world::check_targets(world_tier, &plugin.targets)?;
+
+        let contributions = {
+            // Validate event-subscription patterns at parse time
+            // (I6.2) — fail-loud beats failing silently at activation
+            // when EventBus::subscribe rejects.
+            for pattern in &raw.contributions.event_subscriptions {
+                crate::event_bus::tokenise_pattern(pattern).map_err(|err| {
+                    PluginError::InvalidManifest(format!(
+                        "contributions.event_subscriptions entry `{pattern}` invalid: {err}"
+                    ))
+                })?;
+            }
+            let mut contributions = raw.contributions;
+            for entry in &mut contributions.interceptors {
+                entry.point = crate::interceptor::ExtensionPoint::parse(&entry.extension_point)?;
+                validate_interceptor(entry, &permissions)?;
+            }
+            contributions
+        };
+
         Ok(Self {
             plugin,
             permissions,
@@ -434,52 +565,7 @@ impl TryFrom<RawManifest> for Manifest {
                 ui: raw.entry_points.ui,
             },
             runtime: raw.runtime,
-            contributions: {
-                // Validate event-subscription patterns at parse time
-                // (I6.2) — fail-loud beats failing silently at
-                // activation when EventBus::subscribe rejects.
-                for pattern in &raw.contributions.event_subscriptions {
-                    crate::event_bus::tokenise_pattern(pattern).map_err(|err| {
-                        PluginError::InvalidManifest(format!(
-                            "contributions.event_subscriptions entry `{pattern}` invalid: {err}"
-                        ))
-                    })?;
-                }
-                raw.contributions
-            },
+            contributions,
         })
     }
-}
-
-/// Validates a fully qualified WIT world identifier of the shape
-/// `<namespace>:<package>@<version>/<world>` — e.g.
-/// `plamenix:plugin@1.0.0/plugin-minimal`. Catches typos at parse time
-/// rather than leaving them to fail mysteriously at instantiation.
-fn validate_world_identifier(world: &str) -> Result<(), PluginError> {
-    let (qualified, world_name) = world.rsplit_once('/').ok_or_else(|| {
-        PluginError::InvalidManifest(format!(
-            "plugin.world `{world}` missing `/<world-name>` suffix"
-        ))
-    })?;
-    if world_name.is_empty() {
-        return Err(PluginError::InvalidManifest(format!(
-            "plugin.world `{world}` has empty world name after `/`"
-        )));
-    }
-    let (package, version) = qualified.rsplit_once('@').ok_or_else(|| {
-        PluginError::InvalidManifest(format!(
-            "plugin.world `{world}` missing `@<version>` between package and world name"
-        ))
-    })?;
-    if package.is_empty() || !package.contains(':') {
-        return Err(PluginError::InvalidManifest(format!(
-            "plugin.world `{world}` package prefix must be `<namespace>:<package>`"
-        )));
-    }
-    Version::parse(version).map_err(|err| {
-        PluginError::InvalidManifest(format!(
-            "plugin.world `{world}` version segment is not valid SemVer: {err}"
-        ))
-    })?;
-    Ok(())
 }

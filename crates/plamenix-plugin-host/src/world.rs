@@ -18,8 +18,9 @@
 //! would grant it. The Object Capability Model the WIT header claims
 //! "by construction" was not constructed.
 //!
-//! This module is points 1 and 3. Point 2 is only partly reachable
-//! today and the [`PluginWorld::linkable`] docs say why.
+//! This module is points 1 and 3. Point 2 lives in [`crate::link`],
+//! which builds a linker holding exactly what a world exposes, so a
+//! component importing more than it declared fails to instantiate.
 
 use serde::{Deserialize, Serialize};
 
@@ -73,26 +74,6 @@ impl PluginWorld {
             Self::Integrated,
             Self::IntegratedDesktop,
         ]
-    }
-
-    /// Whether this host build can actually instantiate a plugin
-    /// targeting this world.
-    ///
-    /// Only `plugin-minimal` can, because a world is linkable when the
-    /// host implements every import it exposes, and the only host
-    /// import implemented so far is `host` itself — `db`, `db-write`,
-    /// `fs`, `net`, `event-bus`, `settings`, `command`, `clipboard`,
-    /// `notify`, and `keyring` are declared in the WIT and have no
-    /// implementation behind them.
-    ///
-    /// This is deliberately explicit rather than left to fail at
-    /// instantiation. A plugin declaring `plugin-db-reader` used to get
-    /// a wasmtime linker error naming a missing import, which reads as
-    /// a bug in the plugin; it is a gap in the host, and the refusal
-    /// should say so.
-    #[must_use]
-    pub const fn linkable(self) -> bool {
-        matches!(self, Self::Minimal)
     }
 
     /// Whether this world can only be satisfied by the desktop edition.
@@ -243,6 +224,9 @@ pub fn parse_world_identifier(world: &str) -> Result<PluginWorld, PluginError> {
 #[must_use]
 pub fn world_exposing(interface: &str) -> Option<PluginWorld> {
     let name = interface.strip_prefix("plamenix:plugin/")?;
+    // wasmtime names the import with its package version attached
+    // (`db@1.0.0`), which is not part of the interface name.
+    let name = name.split_once('@').map_or(name, |(head, _)| head);
     match name {
         "host" => Some(PluginWorld::Minimal),
         "db" => Some(PluginWorld::DbReader),
@@ -289,23 +273,6 @@ pub fn check_permissions(
             world.name(),
         )))
     })
-}
-
-/// Refuses a world this host build cannot link.
-///
-/// # Errors
-///
-/// [`PluginError::InvalidManifest`] when the world is declared in the
-/// contract but its imports have no host implementation.
-pub fn check_linkable(world: PluginWorld) -> Result<(), PluginError> {
-    if world.linkable() {
-        return Ok(());
-    }
-    Err(PluginError::InvalidManifest(format!(
-        "plugin.world `{}` is declared in the contract but this host build implements only `{}` — the imports the higher tiers expose (db, fs, net, settings, command, clipboard, notify, keyring) have no host implementation yet",
-        world.name(),
-        PluginWorld::Minimal.name(),
-    )))
 }
 
 /// Refuses a manifest whose declared world and declared editions
@@ -481,16 +448,6 @@ mod tests {
                 &permissions(vec![Permission::DbReadAny, Permission::NetHttps]),
             )
             .is_ok()
-        );
-    }
-
-    #[test]
-    fn only_minimal_is_linkable_and_the_refusal_explains_whose_fault_it_is() {
-        assert!(check_linkable(PluginWorld::Minimal).is_ok());
-        let err = check_linkable(PluginWorld::DbReader).unwrap_err();
-        assert!(
-            err.to_string().contains("no host implementation"),
-            "the refusal must not read like the plugin is at fault",
         );
     }
 

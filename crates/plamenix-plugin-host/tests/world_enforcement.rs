@@ -8,9 +8,9 @@
 //! `plugin-minimal` (which imports nothing but `host`) while requesting
 //! write access to the database, and the host would accept both.
 //!
-//! These go through `Manifest::parse`, not through the world module's
-//! own unit tests, because the question is whether the enforcement is
-//! actually on the path a plugin takes.
+//! These go through `Manifest::parse` and `activate`, not through the
+//! world module's own unit tests, because the question is whether the
+//! enforcement is actually on the path a plugin takes.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -94,11 +94,65 @@ fn a_desktop_only_world_may_not_claim_to_run_on_web() {
     assert!(err.to_string().contains("web edition"));
 }
 
-#[test]
-fn a_world_the_host_cannot_link_is_refused_when_it_ships_wasm() {
-    // Higher tiers are declared in the contract but their imports have
-    // no host implementation, so instantiating one would fail with a
-    // wasmtime linker error that reads like the plugin's fault.
+/// A component that imports more than its declared world exposes must
+/// be refused, and told which world would have worked.
+///
+/// This replaces a test that asserted the host refused every world
+/// above `plugin-minimal`, which it did because none of the higher
+/// tiers had an implementation. They do now, so the claim under test
+/// changed shape: the question is no longer "can the host link this"
+/// but "does the declared world bound what the plugin can reach".
+///
+/// The fixture's manifest says `plugin-minimal` while its wasm imports
+/// `plamenix:plugin/db`. Nothing about it is malicious — it is what an
+/// author gets by adding a feature and forgetting to raise the world.
+#[tokio::test]
+async fn a_component_importing_more_than_its_world_is_refused() {
+    let host = plamenix_plugin_host::PluginHost::new().expect("host");
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("manifest.toml"),
+        manifest_with(r#"world = "plamenix:plugin@1.0.0/plugin-minimal""#, ""),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("plugin.wasm"),
+        include_bytes!("fixtures/over-reaching-plugin.wasm"),
+    )
+    .unwrap();
+
+    let staged = plamenix_plugin_host::load(
+        &host,
+        &semver::Version::parse("1.0.0-beta").unwrap(),
+        dir.path(),
+    )
+    .expect("staging only compiles the component; the refusal is at instantiation");
+
+    let err = plamenix_plugin_host::activate(&host, "1.0.0-beta", &staged)
+        .await
+        .expect_err("a minimal-world plugin must not reach the db interface");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("plamenix:plugin/db"),
+        "the refusal should name the import that was not allowed: {message}",
+    );
+    assert!(
+        !message.contains("not found in the linker"),
+        "wasmtime's own wording reads as a broken host; it should have been translated: {message}",
+    );
+    assert!(
+        message.contains("plugin-db-reader"),
+        "and the world that would have worked: {message}",
+    );
+}
+
+/// The same fixture, declaring the world it actually needs, activates.
+///
+/// Without this the test above would pass against a host that refused
+/// every plugin.
+#[tokio::test]
+async fn the_same_component_activates_once_it_declares_the_right_world() {
     let host = plamenix_plugin_host::PluginHost::new().expect("host");
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(
@@ -106,25 +160,29 @@ fn a_world_the_host_cannot_link_is_refused_when_it_ships_wasm() {
         manifest_with(r#"world = "plamenix:plugin@1.0.0/plugin-db-reader""#, ""),
     )
     .unwrap();
-    std::fs::write(dir.path().join("plugin.wasm"), b"\0asm\x01\0\0\0").unwrap();
+    std::fs::write(
+        dir.path().join("plugin.wasm"),
+        include_bytes!("fixtures/over-reaching-plugin.wasm"),
+    )
+    .unwrap();
 
-    let err = plamenix_plugin_host::load(
+    let staged = plamenix_plugin_host::load(
         &host,
         &semver::Version::parse("1.0.0-beta").unwrap(),
         dir.path(),
     )
-    .expect_err("an unlinkable world must be refused");
-    let message = err.to_string();
-    assert!(
-        message.contains("no host implementation"),
-        "the refusal must name the host as the gap, not the plugin: {message}",
-    );
+    .expect("load");
+
+    plamenix_plugin_host::activate(&host, "1.0.0-beta", &staged)
+        .await
+        .expect("declaring plugin-db-reader should be enough to reach the db interface");
 }
 
 #[test]
-fn a_ui_only_plugin_may_declare_a_world_the_host_cannot_link() {
-    // There is nothing to link. Refusing here would block a perfectly
-    // valid UI-only plugin over an import it never uses.
+fn a_ui_only_plugin_needs_no_linking() {
+    // There is nothing to instantiate, so the declared world costs
+    // nothing to satisfy. Refusing here would block a perfectly valid
+    // UI-only plugin over imports it never uses.
     let host = plamenix_plugin_host::PluginHost::new().expect("host");
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(

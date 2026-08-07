@@ -42,6 +42,7 @@ pub mod imports;
 pub mod instance;
 pub mod interceptor;
 pub mod limits;
+pub mod link;
 pub mod loader;
 pub mod manifest;
 pub mod plx;
@@ -82,6 +83,7 @@ pub use limits::{
     DEFAULT_MAX_TABLE_ELEMENTS, DEFAULT_MAX_TABLES, ResourceLimits, ResourceLimitsBuilder,
     ResourceLimitsOverride,
 };
+pub use link::register_for_world;
 pub use loader::{StagedPlugin, load};
 pub use manifest::{
     Contributions, Edition, EntryPoints, Manifest, PluginMetadata, RestartPolicy, RuntimeFlags,
@@ -105,6 +107,4 @@ pub use supervisor::{
     RestartDecision, Supervisor,
 };
 pub use trap::{CallFailure, FailureKind};
-pub use world::{
-    PluginWorld, check_linkable, check_permissions, check_targets, parse_world_identifier,
-};
+pub use world::{PluginWorld, check_permissions, check_targets, parse_world_identifier};

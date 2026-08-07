@@ -21,7 +21,7 @@ use crate::bindings::exports::plamenix::plugin::plugin as wit_plugin;
 use crate::error::PluginError;
 use crate::event_bus::EventBus;
 use crate::host::PluginHost;
-use crate::host_impl::{HostState, register_host};
+use crate::host_impl::HostState;
 use crate::instance::{InstanceRegistry, PluginInstance};
 use crate::loader::StagedPlugin;
 use crate::trap::CallFailure;
@@ -177,8 +177,10 @@ async fn instantiate(
     staged: &StagedPlugin,
     component: &wasmtime::component::Component,
 ) -> Result<(Store<HostState>, PluginBindings), PluginError> {
+    // Only what the declared world exposes. A component importing more
+    // than this fails to instantiate, which is the enforcement.
     let mut linker = Linker::<HostState>::new(host.engine());
-    register_host(&mut linker)?;
+    crate::link::register_for_world(&mut linker, staged.manifest.plugin.world_tier)?;
 
     // I8.6 — resolve the per-store ResourceLimits from the manifest's
     // `[runtime.limits]` table on top of the I8.6 defaults. The

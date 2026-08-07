@@ -2194,6 +2194,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "plamenix-meta"
+version = "1.0.0-beta"
+dependencies = [
+ "plamenix-db",
+ "plamenix-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "plamenix-plugin-host"
 version = "1.0.0-beta"
 dependencies = [

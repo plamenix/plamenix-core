@@ -129,6 +129,43 @@ pub enum StatementShape {
     NoResultSet,
 }
 
+/// Whether an `EXECUTE BLOCK` declares output, and so produces a
+/// cursor.
+///
+/// Only the header is inspected — everything before the `AS` that opens
+/// the body — because the body may contain the word in a string literal
+/// or a nested statement, and a block that merely mentions `RETURNS`
+/// does not return anything.
+fn execute_block_returns(sql: &str) -> bool {
+    let upper = sql.to_ascii_uppercase();
+    let header_end = upper
+        .match_indices("AS")
+        .find(|(idx, _)| {
+            let before_ok = *idx == 0
+                || !upper.as_bytes()[idx - 1].is_ascii_alphanumeric()
+                    && upper.as_bytes()[idx - 1] != b'_';
+            let after = idx + 2;
+            let after_ok = after >= upper.len()
+                || !upper.as_bytes()[after].is_ascii_alphanumeric()
+                    && upper.as_bytes()[after] != b'_';
+            before_ok && after_ok
+        })
+        .map_or(upper.len(), |(idx, _)| idx);
+
+    upper[..header_end]
+        .match_indices("RETURNS")
+        .any(|(idx, _)| {
+            let before_ok = idx == 0
+                || !upper.as_bytes()[idx - 1].is_ascii_alphanumeric()
+                    && upper.as_bytes()[idx - 1] != b'_';
+            let after = idx + "RETURNS".len();
+            let after_ok = after >= header_end
+                || !upper.as_bytes()[after].is_ascii_alphanumeric()
+                    && upper.as_bytes()[after] != b'_';
+            before_ok && after_ok
+        })
+}
+
 /// Classifies a statement by how its results come back.
 #[must_use]
 pub fn statement_shape(sql: &str) -> StatementShape {
@@ -143,10 +180,15 @@ pub fn statement_shape(sql: &str) -> StatementShape {
             let second = words.next().map(str::to_ascii_uppercase);
             if second.as_deref() == Some("PROCEDURE") {
                 StatementShape::OutputParams
-            } else {
-                // EXECUTE BLOCK, which is cursor-producing when it
-                // declares RETURNS and calls SUSPEND.
+            } else if execute_block_returns(trimmed) {
                 StatementShape::Cursor
+            } else {
+                // `EXECUTE BLOCK AS BEGIN ... END` returns nothing.
+                // Treating every block as a cursor made the driver ask
+                // for one that was never opened, and Firebird answered
+                // `-504 Invalid cursor reference / Cursor is not open` —
+                // for a statement that had in fact run and committed.
+                StatementShape::NoResultSet
             }
         }
         _ => StatementShape::NoResultSet,
@@ -548,11 +590,52 @@ fn parse_set_term(sql: &str, i: usize, current: &str) -> Option<(String, usize)>
 
 #[cfg(test)]
 mod tests {
-    use super::split_statements;
+    use super::{StatementShape, split_statements, statement_shape};
 
     /// Reproduces, offline, what the live FB 5.0.4 container showed:
     /// without terminator awareness a block is torn at its internal
     /// semicolons and every fragment fails to parse.
+    #[test]
+    fn an_execute_block_without_returns_produces_no_cursor() {
+        // Every `EXECUTE BLOCK` used to be classified as a cursor. A
+        // block with no `RETURNS` returns nothing, so the driver asked
+        // for a cursor that was never opened and Firebird answered
+        // `-504 Cursor is not open` — for a statement that had actually
+        // run and committed. Anyone writing a procedural block in the
+        // editor hit it.
+        assert_eq!(
+            statement_shape("EXECUTE BLOCK AS BEGIN INSERT INTO T VALUES (1); END"),
+            StatementShape::NoResultSet,
+        );
+    }
+
+    #[test]
+    fn an_execute_block_with_returns_still_produces_a_cursor() {
+        assert_eq!(
+            statement_shape("EXECUTE BLOCK RETURNS (N INTEGER) AS BEGIN N = 1; SUSPEND; END"),
+            StatementShape::Cursor,
+        );
+        assert_eq!(
+            statement_shape(
+                "EXECUTE BLOCK (P INTEGER = ?) RETURNS (N INTEGER) AS BEGIN N = P; SUSPEND; END"
+            ),
+            StatementShape::Cursor,
+        );
+    }
+
+    #[test]
+    fn the_word_returns_inside_a_block_body_does_not_make_it_a_cursor() {
+        // Only the header decides. A body that merely mentions the word
+        // — in a string, a comment, or a nested statement — returns
+        // nothing.
+        assert_eq!(
+            statement_shape(
+                "EXECUTE BLOCK AS BEGIN INSERT INTO LOG VALUES ('nothing RETURNS here'); END"
+            ),
+            StatementShape::NoResultSet,
+        );
+    }
+
     #[test]
     fn execute_block_survives_without_set_term() {
         let stmts =

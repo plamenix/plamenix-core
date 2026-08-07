@@ -594,6 +594,42 @@ fn build_connection(
     }
 }
 
+/// Creates an embedded Firebird database file, then drops the
+/// connection that made it.
+///
+/// Attaching and creating are different operations in Firebird, and
+/// `connect` only attaches — a caller that owns its own local database
+/// (Plamenix's metadata store) has to be able to bring one into
+/// existence on first run rather than shipping an empty `.fdb` or
+/// asking the user to run `isql`.
+///
+/// Idempotent by omission: it is the caller's job to check whether the
+/// file exists first, because "create" on an existing Firebird database
+/// is an error and not a benign one.
+///
+/// # Errors
+///
+/// [`DbError::Connect`] when the engine refuses, including when the
+/// file already exists.
+#[cfg(feature = "native")]
+pub fn create_embedded_database(config: &ConnectionConfig) -> Result<(), DbError> {
+    let Some(path) = resolver::resolve_fbclient_path(config) else {
+        return Err(DbError::Connect(
+            "creating an embedded database requires a bundled fbclient".into(),
+        ));
+    };
+    let mut builder = rsfbclient::builder_native()
+        .with_dyn_load(path.to_string_lossy().into_owned())
+        .with_embedded();
+    builder.db_name(&config.database);
+    builder.user(&config.user);
+    apply_charset_embedded(&mut builder, config)?;
+    builder
+        .create_database()
+        .map(|_| ())
+        .map_err(|err| DbError::Connect(err.to_string()))
+}
+
 #[cfg(feature = "native")]
 fn build_native(
     config: &ConnectionConfig,

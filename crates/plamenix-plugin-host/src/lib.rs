@@ -43,6 +43,7 @@ pub mod limits;
 pub mod loader;
 pub mod manifest;
 pub mod plx;
+pub mod services;
 pub mod signing;
 pub mod supervisor;
 pub mod trap;
@@ -83,6 +84,10 @@ pub use manifest::{
 pub use plx::{
     MANIFEST_NAME, RESOURCES_DIR, UI_NAME, WASM_NAME, extract_plx, extract_plx_bytes,
     peek_plx_manifest, peek_plx_manifest_bytes, write_plx,
+};
+pub use services::{
+    CallCtx, HostCell, HostColumn, HostHttpRequest, HostHttpResponse, HostQueryResult, HostRow,
+    HostSchema, HostServices, HostStatementOutcome, HostTable, NoServices, ServiceError,
 };
 pub use signing::{
     ALGORITHM, PluginSignature, SIGNATURE_NAME, VerificationOutcome, compute_archive_digest,

@@ -30,13 +30,17 @@
     )
 )]
 
+use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use wasmtime::component::{Linker, ResourceTable};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
 
 use crate::bindings::plamenix::plugin::host as wit_host;
+use crate::capability::PermissionSet;
 use crate::error::PluginError;
+use crate::services::{HostServices, NoServices};
 
 /// Severity level for [`RecordedLog`], copied from the WIT enum so the
 /// public API does not leak the wit-bindgen-generated types.
@@ -143,6 +147,31 @@ pub struct HostState {
     /// Per-plugin wasmtime resource caps (memory / tables / instances).
     /// Default is the 64 MiB baseline from [`crate::limits`].
     pub resource_limits: crate::limits::ResourceLimits,
+    /// What the embedding shell provides on this plugin's behalf —
+    /// database, keyring, clipboard, and the rest. Defaults to
+    /// [`NoServices`], which provides nothing, so a host that has not
+    /// been handed services still constructs.
+    pub services: Arc<dyn HostServices>,
+    /// The capability tier the plugin declared. Read by
+    /// [`crate::gate`] as the first of the three checks a host import
+    /// makes, and by [`crate::link`] to decide what to register.
+    pub world: crate::world::PluginWorld,
+    /// What the plugin's manifest asked for. A capability that is not
+    /// in here was never declared, and the plugin is outside its own
+    /// contract asking for it.
+    pub declared: PermissionSet,
+    /// What the user has actually approved.
+    ///
+    /// A snapshot, refreshed once per plugin call by
+    /// [`HostState::refresh_grants`] rather than per import: grants
+    /// live behind a lock in the shell, and a call that saw a
+    /// permission appear halfway through would be harder to reason
+    /// about than one that sees a consistent view.
+    pub granted: HashSet<String>,
+    /// Root of the plugin's own data directory, if the shell gave it
+    /// one. Every `fs` path resolves inside this and nowhere else.
+    /// `None` means the plugin has no filesystem at all.
+    pub data_dir: Option<PathBuf>,
 }
 
 impl HostState {
@@ -166,7 +195,58 @@ impl HostState {
             wasi: WasiCtxBuilder::new().inherit_stdio().build(),
             table: ResourceTable::new(),
             resource_limits: crate::limits::ResourceLimits::default(),
+            services: Arc::new(NoServices),
+            world: crate::world::PluginWorld::Minimal,
+            declared: PermissionSet::default(),
+            granted: HashSet::new(),
+            data_dir: None,
         }
+    }
+
+    /// Attaches what the embedding shell provides.
+    ///
+    /// Without this the plugin gets [`NoServices`] and every import
+    /// beyond logging refuses — which is the correct behaviour for a
+    /// host that has not wired itself up, and is what the whole crate
+    /// did before these interfaces existed.
+    #[must_use]
+    pub fn with_services(mut self, services: Arc<dyn HostServices>) -> Self {
+        self.services = services;
+        self
+    }
+
+    /// Records the capability tier the plugin declared.
+    #[must_use]
+    pub const fn with_world(mut self, world: crate::world::PluginWorld) -> Self {
+        self.world = world;
+        self
+    }
+
+    /// Records what the plugin's manifest asked for.
+    #[must_use]
+    pub fn with_declared_permissions(mut self, declared: PermissionSet) -> Self {
+        self.declared = declared;
+        self
+    }
+
+    /// Points the plugin's `fs` surface at a directory.
+    ///
+    /// The host resolves every plugin-supplied path inside this root
+    /// and refuses anything that escapes. Leaving it unset is how a
+    /// plugin ends up with no filesystem rather than the host's.
+    #[must_use]
+    pub fn with_data_dir(mut self, data_dir: impl Into<PathBuf>) -> Self {
+        self.data_dir = Some(data_dir.into());
+        self
+    }
+
+    /// Re-reads the user's grants from the shell.
+    ///
+    /// Called by the dispatcher once before each plugin call. Doing it
+    /// per import instead would take a lock inside every host function
+    /// and let a permission change take effect halfway through a call.
+    pub fn refresh_grants(&mut self) {
+        self.granted = self.services.granted_for(&self.plugin_id);
     }
 
     /// Overrides the per-store wasmtime resource limits (memory cap,

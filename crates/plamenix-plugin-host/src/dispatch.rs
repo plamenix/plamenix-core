@@ -26,7 +26,6 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use crate::concurrency::InFlightAcquireError;
-use crate::epoch::CallClass;
 use crate::event_bus::EventBus;
 use crate::host_impl::PendingEmit;
 use crate::instance::InstanceRegistry;
@@ -182,7 +181,13 @@ async fn dispatch_one(
     // Set per call, not once at activation: a deadline is spent when it
     // passes, so a store that has already been preempted would enter
     // its next call with no budget at all.
-    store.set_epoch_deadline(CallClass::Interactive.deadline_ticks());
+    //
+    // The class depends on what the plugin declared — see
+    // `HostState::dispatch_call_class`. A plugin that can query the
+    // database cannot be held to the interactive budget without being
+    // disabled for our own latency.
+    let class = store.data().dispatch_call_class();
+    store.set_epoch_deadline(class.deadline_ticks());
 
     let result = instance
         .bindings()

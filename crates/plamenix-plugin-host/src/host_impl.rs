@@ -293,6 +293,48 @@ impl HostState {
         self
     }
 
+    /// The deadline class an event dispatched to this plugin should get.
+    ///
+    /// A plugin that declared no I/O capability cannot do anything slow
+    /// except compute, so the interactive budget is right and keeps it
+    /// honest. One that declared database or network access can, and
+    /// holding it to 100ms would mean disabling it for the host's own
+    /// latency the first time it ran a real query — the supervisor
+    /// would charge crash budget for waiting on our database.
+    ///
+    /// Interceptors do not use this. They stand between the user and
+    /// something they asked for, the chain has its own 500ms budget,
+    /// and `plugin-interceptors.md` already forbids slow work there.
+    #[must_use]
+    pub fn dispatch_call_class(&self) -> crate::epoch::CallClass {
+        let does_io = self
+            .declared
+            .required
+            .iter()
+            .chain(self.declared.optional.iter())
+            .any(|grant| {
+                matches!(
+                    grant.capability,
+                    crate::capability::Permission::DbReadAny
+                        | crate::capability::Permission::DbReadTable(_)
+                        | crate::capability::Permission::DbWriteAny
+                        | crate::capability::Permission::DbWriteTable(_)
+                        | crate::capability::Permission::DbDdlAny
+                        | crate::capability::Permission::DbDdlTable(_)
+                        | crate::capability::Permission::DbSchemaList
+                        | crate::capability::Permission::DbSchemaDescribe
+                        | crate::capability::Permission::NetHttps
+                        | crate::capability::Permission::NetHttpsHost(_)
+                        | crate::capability::Permission::NetHttp
+                )
+            });
+        if does_io {
+            crate::epoch::CallClass::Background
+        } else {
+            crate::epoch::CallClass::Interactive
+        }
+    }
+
     /// Who the host is acting for, for a call into
     /// [`crate::services::HostServices`].
     ///
@@ -427,4 +469,55 @@ pub fn register_host(linker: &mut Linker<HostState>) -> Result<(), PluginError> 
         .map_err(|err| PluginError::Runtime(err.to_string()))?;
     wit_host::add_to_linker(linker, |state: &mut HostState| state)
         .map_err(|err| PluginError::Runtime(err.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use crate::capability::{Permission, PermissionGrant};
+    use crate::epoch::CallClass;
+
+    fn with_declared(declared: Vec<Permission>) -> HostState {
+        HostState::new("dev.plamenix.test", "1.0.0-beta").with_declared_permissions(PermissionSet {
+            required: declared.into_iter().map(PermissionGrant::new).collect(),
+            optional: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn a_plugin_with_no_io_capabilities_stays_on_the_interactive_budget() {
+        // It can only compute, so the tight budget keeps it honest.
+        let state = with_declared(vec![Permission::ClipboardRead]);
+        assert_eq!(state.dispatch_call_class(), CallClass::Interactive);
+    }
+
+    #[test]
+    fn a_plugin_that_can_query_the_database_gets_the_background_budget() {
+        // Otherwise its first real query blows a 100ms deadline and the
+        // supervisor charges it crash budget for waiting on us.
+        let state = with_declared(vec![Permission::DbReadAny]);
+        assert_eq!(state.dispatch_call_class(), CallClass::Background);
+    }
+
+    #[test]
+    fn an_optional_io_capability_counts_too() {
+        // The user may grant it at any moment, and the budget cannot be
+        // re-decided halfway through a call.
+        let mut state = with_declared(Vec::new());
+        state.declared.optional = vec![PermissionGrant::new(Permission::NetHttps)];
+        assert_eq!(state.dispatch_call_class(), CallClass::Background);
+    }
+
+    #[test]
+    fn host_time_is_charged_in_whole_ticks_and_rounds_up() {
+        // Rounding down would let many sub-tick host calls add up to
+        // real time the plugin is never repaid for.
+        let mut state = with_declared(Vec::new());
+        state.charge_host_time(std::time::Duration::from_millis(1));
+        assert_eq!(state.host_import_ticks, 1);
+        state.charge_host_time(std::time::Duration::from_millis(25));
+        assert_eq!(state.host_import_ticks, 4);
+    }
 }

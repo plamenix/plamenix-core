@@ -151,7 +151,7 @@ async fn a_plugin_reads_a_row_and_gets_it_intact() {
 
     assert_eq!(
         shell.seen_sql.lock().unwrap().as_slice(),
-        ["SELECT amount FROM ledger"],
+        ["SELECT COUNT(*) FROM RDB$RELATIONS WHERE RDB$SYSTEM_FLAG = 0"],
         "the plugin's SQL should reach the shell verbatim",
     );
     assert!(

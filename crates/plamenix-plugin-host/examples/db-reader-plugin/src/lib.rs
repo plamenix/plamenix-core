@@ -10,6 +10,11 @@
 //! see from outside the sandbox what a plugin actually received. A test
 //! that asserted only "the call returned Ok" would pass against a
 //! plugin that ignored the rows.
+//!
+//! It also ships as a bundled plugin, so the capability model is
+//! visible in the running app: it declares `db.read.any`, the
+//! permissions panel shows that as pending until the user approves it,
+//! and until then every query it makes is refused.
 
 wit_bindgen::generate!({
     path: "wit",
@@ -59,7 +64,14 @@ impl Guest for DbReaderPlugin {
             }
         };
 
-        match query_read(&session, "SELECT amount FROM ledger") {
+        // Counts user tables. Chosen because it runs against any
+        // Firebird database without knowing its schema, reads nothing
+        // the user did not already have on screen, and produces a
+        // number a person can sanity-check against the object tree.
+        match query_read(
+            &session,
+            "SELECT COUNT(*) FROM RDB$RELATIONS WHERE RDB$SYSTEM_FLAG = 0",
+        ) {
             Ok(result) => {
                 let mut message = String::from("db-reader read ");
                 message.push_str(&result.rows.len().to_string());

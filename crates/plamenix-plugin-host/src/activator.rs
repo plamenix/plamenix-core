@@ -16,7 +16,7 @@ use std::sync::Arc;
 use wasmtime::Store;
 use wasmtime::component::Linker;
 
-use crate::bindings::PluginMinimal;
+use crate::bindings::PluginBindings;
 use crate::bindings::exports::plamenix::plugin::plugin as wit_plugin;
 use crate::error::PluginError;
 use crate::event_bus::EventBus;
@@ -107,7 +107,7 @@ pub async fn activate_with_state(
     // host explicitly extends it.
     store.set_epoch_deadline(crate::epoch::CallClass::Background.deadline_ticks());
 
-    let bindings = PluginMinimal::instantiate_async(&mut store, component, &linker)
+    let bindings = PluginBindings::instantiate_async(&mut store, component, &linker)
         .await
         .map_err(|err| PluginError::Runtime(CallFailure::from_error(&err).to_string()))?;
 
@@ -180,7 +180,7 @@ pub async fn activate_into_registry(
     // host explicitly extends it.
     store.set_epoch_deadline(crate::epoch::CallClass::Background.deadline_ticks());
 
-    let bindings = PluginMinimal::instantiate_async(&mut store, component, &linker)
+    let bindings = PluginBindings::instantiate_async(&mut store, component, &linker)
         .await
         .map_err(|err| PluginError::Runtime(CallFailure::from_error(&err).to_string()))?;
 

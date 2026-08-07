@@ -67,8 +67,15 @@ interface plugin {
     /// opaque). Plugins MUST NOT block the host: handle-event runs
     /// inside the same plugin store as other invocations and
     /// long-running work should be deferred to a host-spawned task.
-    /// The host enforces the same 100ms interactive deadline as
-    /// regular calls (see I8 supervisor).
+    ///
+    /// The deadline depends on what the plugin declared. A plugin with
+    /// no I/O capabilities gets the interactive budget; one that
+    /// declared database or network capabilities gets the background
+    /// budget, because a real query cannot finish inside the
+    /// interactive one and disabling a plugin for the host's own I/O
+    /// latency would be the host's bug, not the plugin's. Time spent
+    /// inside a host import is repaid to the deadline either way; time
+    /// spent computing in the plugin is not.
     ///
     /// Plugins that register no subscriptions ship an empty body that
     /// returns immediately; the export is mandatory at the WIT level
@@ -138,10 +145,15 @@ interface db {
     }
 
     /// Lightweight column descriptor returned with each query result.
+    ///
+    /// `sql-type` and `nullable` are optional because the driver does
+    /// not currently carry them: `plamenix-db`'s `Column` is a name and
+    /// nothing else. Filling in `""` and `true` would be a lie plugins
+    /// would branch on, so absence is stated instead.
     record column-info {
         name: string,
-        sql-type: string,
-        nullable: bool,
+        sql-type: option<string>,
+        nullable: option<bool>,
     }
 
     /// Tagged-union column value matching `plamenix-types::ColumnValue`.
@@ -151,6 +163,14 @@ interface db {
         null,
         text(string),
         integer(s64),
+        /// NUMERIC / DECIMAL, as the exact decimal text.
+        ///
+        /// Not `float`. Firebird stores these as scaled integers and the
+        /// host vendors a patched `rsfbclient-rust` precisely to stop
+        /// them being coerced to a double before they reach us; routing
+        /// them through `f64` here would undo that for every plugin
+        /// that touches money.
+        decimal(string),
         float(f64),
         boolean(bool),
         blob-ref(blob-ref),
@@ -191,13 +211,23 @@ interface db {
     /// + `db:schema.describe`.
     describe-schema: func(session-id: string) -> result<schema, db-error>;
 
-    /// Returns the current foreground session id if a tab is active;
-    /// none when the user is on the connect screen. Capability:
-    /// `db.session:context.read`.
-    current-session: func() -> option<string>;
+    /// Returns the current foreground session id if a tab is active.
+    ///
+    /// `ok(none)` means the user is on the connect screen. A denied
+    /// capability is an `err`, not a `none` — the two are different
+    /// facts and a plugin that cannot tell them apart will retry
+    /// forever against a permission it was never given. Capability:
+    /// `db.session.context.read`.
+    current-session: func() -> result<option<string>, db-error>;
 
     /// Read-only execution. Plugin SQL is wrapped in a read-only
-    /// transaction by the host. Capability: `db:query.read`.
+    /// transaction by the host. Capability: `db.read.any`.
+    ///
+    /// `session-id` is checked against the session the host made this
+    /// call for, and a mismatch is `invalid-session`. It reads like a
+    /// selector and is not one: on the web edition a single plugin
+    /// instance serves every tenant, so letting the plugin choose the
+    /// session would let it read a database the user never opened.
     query-read: func(session-id: string, sql: string) -> result<query-result, db-error>;
 }
 
@@ -220,13 +250,24 @@ interface db-write {
         affected(exec-result),
     }
 
-    /// Run a single statement. Host applies capability check + invokes
-    /// the registered interceptor chain (`query.executing`) before
-    /// execution; an interceptor may cancel.
-    /// Capability: `db.write:execute`.
+    /// Run a single statement. Capability: `db.write.any`.
+    ///
+    /// The `query.executing` interceptor chain does NOT run for
+    /// statements originating here, and cannot: an interceptor is
+    /// called with the plugin's store locked, so a plugin that both
+    /// intercepts `query.executing` and calls `execute` would deadlock
+    /// itself, and two such plugins would deadlock each other. The
+    /// chain governs statements the *user* originated. Plugin SQL is
+    /// governed by the capabilities the plugin declared and the user
+    /// granted, which is the check that actually happens here.
     execute: func(session-id: string, sql: string) -> result<statement-outcome, db-error>;
 
-    /// Transaction control. Capability: `db.write:tx.*`.
+    /// Transaction control.
+    ///
+    /// No capability of its own: a plugin holding `db.write.any` can
+    /// already change the data, and minting a separate `db.tx.*` grant
+    /// would put a second prompt in front of something the first one
+    /// already implies.
     tx-begin:    func(session-id: string) -> result<_, db-error>;
     tx-commit:   func(session-id: string) -> result<_, db-error>;
     tx-rollback: func(session-id: string) -> result<_, db-error>;
@@ -237,9 +278,16 @@ interface db-write {
 // ─────────────────────────────────────────────────────────────────────
 
 interface fs {
-    /// Failure modes for filesystem operations. All paths are relative
-    /// to the plugin's preopened data directory; absolute paths and
-    /// `..` traversal are rejected at the WASI layer.
+    /// Failure modes for filesystem operations.
+    ///
+    /// All paths are relative to the plugin's own data directory, and
+    /// the host resolves each one and refuses anything that leaves it:
+    /// absolute paths, `..` components, and symlinks that escape.
+    ///
+    /// The jail is the host's, NOT WASI's. Handing the plugin a WASI
+    /// preopen would also hand it the whole `wasi:filesystem`
+    /// interface, which is a strictly larger grant than the four
+    /// functions below.
     variant fs-error {
         not-found,
         permission-denied(string),
@@ -307,15 +355,36 @@ interface net {
 // ─────────────────────────────────────────────────────────────────────
 
 interface event-bus {
-    /// Emit an event on a plugin-owned topic (`<plugin-id>:…`). Host
-    /// rejects emits to topics outside the plugin's namespace unless
-    /// the plugin holds `event:publish:<channel>` capability.
-    emit: func(topic: string, payload: string);
+    variant event-error {
+        /// Topic is outside the plugin's namespace and it does not
+        /// hold `event.publish.<channel>`.
+        capability-denied(string),
+        /// Topic does not parse in the bus grammar.
+        invalid-topic(string),
+        /// Payload exceeded the per-emit ceiling, which is returned.
+        payload-too-large(u32),
+        /// Too many emits from one call; the rest were dropped.
+        backpressure,
+    }
+
+    /// Emit an event on a plugin-owned topic (`<plugin-id>:…`). Topics
+    /// outside the plugin's namespace require
+    /// `event.publish.<channel>`.
+    ///
+    /// Returns a result because a rejected emit that looked like a
+    /// success would have plugins publishing into the void forever.
+    ///
+    /// The event is queued, not delivered inline. The host is holding
+    /// this plugin's store while the call runs, so dispatching from
+    /// here would deadlock a plugin that subscribes to its own topic —
+    /// and no epoch deadline would fire to break it, because no wasm
+    /// would be executing. The host drains the queue after the call
+    /// returns, to a bounded cascade depth.
+    emit: func(topic: string, payload: string) -> result<_, event-error>;
 
     // Subscriptions are declared via the plugin's manifest
     // (`[[contributions.event_subscriptions]]`) and dispatched into
-    // the plugin's exported `handle-event` (defined in `plugin`
-    // interface extension landing in I6).
+    // the plugin's exported `handle-event`.
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -323,16 +392,30 @@ interface event-bus {
 // ─────────────────────────────────────────────────────────────────────
 
 interface settings {
+    variant settings-error {
+        capability-denied(string),
+        /// Key or value exceeded a size ceiling, which is returned.
+        too-large(u32),
+        /// The store could not be read or written.
+        backend(string),
+    }
+
     /// Read a setting. Scope is implicitly the calling plugin; no
-    /// cross-plugin reads possible. Capability: `settings:read`.
-    get: func(key: string) -> option<string>;
+    /// cross-plugin reads are possible. Capability: `settings.read`.
+    ///
+    /// `ok(none)` means the key is unset; a denial is an `err`.
+    get: func(key: string) -> result<option<string>, settings-error>;
 
     /// Write a setting in the calling plugin's scope. Capability:
-    /// `settings:write`.
-    set: func(key: string, value: string);
+    /// `settings.write`.
+    ///
+    /// Returns a result because the alternative is dropping a write
+    /// while telling the plugin it succeeded, and the plugin would
+    /// then read back a value that never landed.
+    set: func(key: string, value: string) -> result<_, settings-error>;
 
-    /// Remove a setting. Capability: `settings:write`.
-    remove: func(key: string);
+    /// Remove a setting. Capability: `settings.write`.
+    remove: func(key: string) -> result<_, settings-error>;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -357,12 +440,23 @@ interface command {
 // ─────────────────────────────────────────────────────────────────────
 
 interface clipboard {
-    /// Read the system clipboard. Always prompts on first use.
-    /// Capability: `clipboard:read`.
-    read: func() -> option<string>;
+    variant clipboard-error {
+        capability-denied(string),
+        /// This edition has no system clipboard to reach.
+        unsupported,
+        backend(string),
+    }
 
-    /// Write to the system clipboard. Capability: `clipboard:write`.
-    write: func(text: string);
+    /// Read the system clipboard. Always prompts on first use.
+    /// Capability: `clipboard.read`.
+    ///
+    /// `ok(none)` means the clipboard is empty. A denial is an `err`:
+    /// returning `none` for both would make a refused permission look
+    /// like an empty clipboard.
+    read: func() -> result<option<string>, clipboard-error>;
+
+    /// Write to the system clipboard. Capability: `clipboard.write`.
+    write: func(text: string) -> result<_, clipboard-error>;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -370,8 +464,19 @@ interface clipboard {
 // ─────────────────────────────────────────────────────────────────────
 
 interface notify {
-    /// Display an OS notification. Capability: `notify:display`.
-    display: func(title: string, body: string);
+    variant notify-error {
+        capability-denied(string),
+        /// This edition cannot post OS notifications.
+        unsupported,
+        backend(string),
+    }
+
+    /// Display an OS notification. Capability: `os.notify`.
+    ///
+    /// Returns a result so a plugin can tell "posted" from "silently
+    /// discarded" — a notification the user never saw and the plugin
+    /// believes it sent is worse than a visible failure.
+    display: func(title: string, body: string) -> result<_, notify-error>;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -387,15 +492,20 @@ interface keyring {
 
     /// Read a secret from the OS keyring. Service name is namespaced
     /// to `dev.plamenix.plugins.<plugin-id>.<service>` by the host; the
-    /// plugin only supplies `<service>` and `<account>`. Capability:
-    /// `secrets:read:service:<service>`.
+    /// plugin only supplies `<service>` and `<account>`.
+    ///
+    /// Two capabilities, because they answer different questions:
+    /// `auth.os.<backend>` is "may this plugin reach the OS keyring at
+    /// all", and `secrets.read.service.<service>` scopes which entries
+    /// it may read. Both must hold.
     get: func(service: string, account: string) -> result<option<string>, keyring-error>;
 
-    /// Write a secret to the OS keyring. Capability:
-    /// `secrets:write:service:<service>`.
+    /// Write a secret to the OS keyring. Capabilities:
+    /// `auth.os.<backend>` and `secrets.write.service.<service>`.
     set: func(service: string, account: string, secret: string) -> result<_, keyring-error>;
 
-    /// Delete a secret. Capability: `secrets:write:service:<service>`.
+    /// Delete a secret. Capabilities: `auth.os.<backend>` and
+    /// `secrets.write.service.<service>`.
     delete: func(service: string, account: string) -> result<_, keyring-error>;
 }
 

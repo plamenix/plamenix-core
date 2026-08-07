@@ -48,7 +48,7 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
 use wasmtime::Store;
 
-use crate::bindings::PluginMinimal;
+use crate::bindings::PluginBindings;
 use crate::concurrency::{CallPermit, InFlightAcquireError, InFlightLimiter};
 use crate::error::PluginError;
 use crate::host_impl::HostState;
@@ -66,7 +66,7 @@ pub struct PluginInstance {
     /// async API isn't `Sync`.
     store: Mutex<Store<HostState>>,
     /// Typed bindings for the plugin's exported interface.
-    bindings: PluginMinimal,
+    bindings: PluginBindings,
     /// I8.8 — concurrent in-flight call cap. Dispatchers
     /// `acquire().await` a permit before invoking the plugin; the
     /// permit drops at the end of the call.
@@ -78,13 +78,13 @@ impl PluginInstance {
     /// default-capacity in-flight limiter (4 concurrent calls).
     ///
     /// Typically constructed by the activator immediately after
-    /// `PluginMinimal::instantiate_async` returns. For overrides
+    /// `PluginBindings::instantiate_async` returns. For overrides
     /// (manifest-driven), use [`PluginInstance::with_in_flight_limiter`].
     #[must_use]
     pub fn new(
         plugin_id: impl Into<String>,
         store: Store<HostState>,
-        bindings: PluginMinimal,
+        bindings: PluginBindings,
     ) -> Self {
         Self::with_in_flight_limiter(
             plugin_id,
@@ -101,7 +101,7 @@ impl PluginInstance {
     pub fn with_in_flight_limiter(
         plugin_id: impl Into<String>,
         store: Store<HostState>,
-        bindings: PluginMinimal,
+        bindings: PluginBindings,
         in_flight: InFlightLimiter,
     ) -> Self {
         Self {
@@ -121,7 +121,7 @@ impl PluginInstance {
     /// Typed bindings; non-mutable so callers can fetch their typed
     /// accessor without grabbing the store lock.
     #[must_use]
-    pub fn bindings(&self) -> &PluginMinimal {
+    pub fn bindings(&self) -> &PluginBindings {
         &self.bindings
     }
 
@@ -288,7 +288,7 @@ fn lock_poisoned<T>(_err: T) -> PluginError {
 mod tests {
     use super::*;
 
-    // PluginMinimal is bindgen-generated and only constructible
+    // PluginBindings is bindgen-generated and only constructible
     // via `instantiate_async` against a real component. Unit tests
     // here exercise the parts of the registry that don't need a
     // populated entry; insert/remove/get/contains over a populated

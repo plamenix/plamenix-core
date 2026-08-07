@@ -85,31 +85,7 @@ pub async fn activate_with_state(
         return Ok(ActivationOutcome::Ok);
     };
 
-    let mut linker = Linker::<HostState>::new(host.engine());
-    register_host(&mut linker)?;
-
-    // I8.6 — resolve the per-store ResourceLimits from the
-    // manifest's `[runtime.limits]` table on top of the I8.6
-    // defaults. The manifest field is optional; missing keys keep the
-    // defaults.
-    let resolved_limits = staged.manifest.runtime.limits.resolve();
-    let state = state.with_resource_limits(resolved_limits);
-    let mut store = Store::new(host.engine(), state);
-    // Attach the host-state-owned ResourceLimits as the store's
-    // limiter. The closure borrows the limits out of HostState;
-    // wasmtime consults it on every memory.grow / table.grow attempt
-    // + when querying the count caps.
-    store.limiter(|state| &mut state.resource_limits);
-    // I8.7 — `activate` is treated as a background-class call: it
-    // may need to allocate, link, and run setup logic. Subsequent
-    // event-dispatch calls (I6.x) use interactive deadlines via
-    // their own dispatcher path. The deadline applies until the
-    // host explicitly extends it.
-    store.set_epoch_deadline(crate::epoch::CallClass::Background.deadline_ticks());
-
-    let bindings = PluginBindings::instantiate_async(&mut store, component, &linker)
-        .await
-        .map_err(|err| PluginError::Runtime(CallFailure::from_error(&err).to_string()))?;
+    let (mut store, bindings) = instantiate(host, state, staged, component).await?;
 
     let activation = bindings
         .plamenix_plugin_plugin()
@@ -158,31 +134,7 @@ pub async fn activate_into_registry(
         return Ok(ActivationOutcome::Ok);
     };
 
-    let mut linker = Linker::<HostState>::new(host.engine());
-    register_host(&mut linker)?;
-
-    // I8.6 — resolve the per-store ResourceLimits from the
-    // manifest's `[runtime.limits]` table on top of the I8.6
-    // defaults. The manifest field is optional; missing keys keep the
-    // defaults.
-    let resolved_limits = staged.manifest.runtime.limits.resolve();
-    let state = state.with_resource_limits(resolved_limits);
-    let mut store = Store::new(host.engine(), state);
-    // Attach the host-state-owned ResourceLimits as the store's
-    // limiter. The closure borrows the limits out of HostState;
-    // wasmtime consults it on every memory.grow / table.grow attempt
-    // + when querying the count caps.
-    store.limiter(|state| &mut state.resource_limits);
-    // I8.7 — `activate` is treated as a background-class call: it
-    // may need to allocate, link, and run setup logic. Subsequent
-    // event-dispatch calls (I6.x) use interactive deadlines via
-    // their own dispatcher path. The deadline applies until the
-    // host explicitly extends it.
-    store.set_epoch_deadline(crate::epoch::CallClass::Background.deadline_ticks());
-
-    let bindings = PluginBindings::instantiate_async(&mut store, component, &linker)
-        .await
-        .map_err(|err| PluginError::Runtime(CallFailure::from_error(&err).to_string()))?;
+    let (mut store, bindings) = instantiate(host, state, staged, component).await?;
 
     let activation = bindings
         .plamenix_plugin_plugin()
@@ -211,6 +163,97 @@ pub async fn activate_into_registry(
         registry.insert(instance)?;
     }
     Ok(outcome)
+}
+
+/// Builds the linker, the store, and the instance for one plugin.
+///
+/// Extracted because the two activation entry points held a
+/// character-for-character copy of it, and every setting below is one
+/// that has to be identical between them — a store missing the epoch
+/// callback or the resource limiter is a sandbox with a hole in it.
+async fn instantiate(
+    host: &PluginHost,
+    state: HostState,
+    staged: &StagedPlugin,
+    component: &wasmtime::component::Component,
+) -> Result<(Store<HostState>, PluginBindings), PluginError> {
+    let mut linker = Linker::<HostState>::new(host.engine());
+    register_host(&mut linker)?;
+
+    // I8.6 — resolve the per-store ResourceLimits from the manifest's
+    // `[runtime.limits]` table on top of the I8.6 defaults. The
+    // manifest field is optional; missing keys keep the defaults.
+    let resolved_limits = staged.manifest.runtime.limits.resolve();
+    let state = state.with_resource_limits(resolved_limits);
+    let mut store = Store::new(host.engine(), state);
+    // The closure borrows the limits out of HostState; wasmtime
+    // consults it on every memory.grow / table.grow attempt and when
+    // querying the count caps.
+    store.limiter(|state| &mut state.resource_limits);
+
+    // Repay time the plugin spent waiting on us.
+    //
+    // The deadline is meant to bound how long a plugin *computes*, but
+    // it is measured in wall-clock epochs, so without this a plugin
+    // that asked the host for a 300ms query would be preempted for our
+    // I/O latency — and the supervisor would charge it crash budget for
+    // waiting on our own database. Every host import records what it
+    // spent; when the deadline fires we hand that back and let the call
+    // continue.
+    //
+    // A plugin that is genuinely spinning accrues nothing, so `owed` is
+    // zero and this returns the interrupt exactly as before. That is
+    // what keeps `misbehaving_plugin.rs` honest.
+    store.epoch_deadline_callback(|mut ctx| {
+        let owed = std::mem::take(&mut ctx.data_mut().host_import_ticks);
+        if owed == 0 {
+            return Err(wasmtime::Trap::Interrupt.into());
+        }
+        Ok(wasmtime::UpdateDeadline::Continue(owed))
+    });
+
+    // `activate` is a background-class call: it may allocate, link, and
+    // run setup logic. Dispatched calls set their own class per call.
+    store.set_epoch_deadline(crate::epoch::CallClass::Background.deadline_ticks());
+
+    let bindings = PluginBindings::instantiate_async(&mut store, component, &linker)
+        .await
+        .map_err(|err| instantiation_error(&err))?;
+
+    Ok((store, bindings))
+}
+
+/// Turns wasmtime's missing-import message into one that blames the
+/// right party.
+///
+/// A component importing an interface its declared world does not
+/// expose fails with "a matching implementation was not found in the
+/// linker", which reads as a broken host. It is the plugin reaching
+/// past its own declaration, and the message should say so and name the
+/// world that would have worked.
+fn instantiation_error(err: &wasmtime::Error) -> PluginError {
+    let failure = CallFailure::from_error(err);
+    if let Some(interface) = missing_plamenix_import(&failure.message) {
+        let advice = crate::world::world_exposing(&interface).map_or_else(
+            || "no world in this contract exposes it".to_owned(),
+            |world| format!("declare `{}`", world.name()),
+        );
+        return PluginError::PermissionDenied(format!(
+            "plugin imports `{interface}`, which its declared world does not expose; {advice}",
+        ));
+    }
+    PluginError::Runtime(failure.to_string())
+}
+
+/// Extracts a `plamenix:plugin/<iface>` name from a linker error.
+fn missing_plamenix_import(message: &str) -> Option<String> {
+    const PREFIX: &str = "plamenix:plugin/";
+    let start = message.find(PREFIX)?;
+    let rest = &message[start..];
+    let end = rest
+        .find(|c: char| c == '`' || c == '\'' || c.is_whitespace())
+        .unwrap_or(rest.len());
+    Some(rest[..end].to_owned())
 }
 
 /// Registers every `[[contributions.event_subscriptions]]` entry from

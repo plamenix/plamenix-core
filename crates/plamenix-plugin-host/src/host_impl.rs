@@ -172,6 +172,35 @@ pub struct HostState {
     /// one. Every `fs` path resolves inside this and nowhere else.
     /// `None` means the plugin has no filesystem at all.
     pub data_dir: Option<PathBuf>,
+    /// Events the plugin asked to emit during the call in progress.
+    ///
+    /// Queued rather than delivered, because the host is holding this
+    /// plugin's store for the whole call: dispatching inline would
+    /// deadlock a plugin that subscribes to its own topic, and no
+    /// epoch deadline would break it because no wasm would be running.
+    /// The dispatcher takes these once the call returns. See
+    /// [`crate::dispatch`].
+    pub outbox: Vec<PendingEmit>,
+    /// How many emits deep the current cascade is. Bounded by
+    /// [`crate::dispatch::MAX_EMIT_DEPTH`] so a plugin that emits what
+    /// it subscribes to terminates.
+    pub call_depth: u8,
+    /// Epoch ticks spent inside host imports during this call.
+    ///
+    /// Repaid to the deadline when it fires — see the epoch callback in
+    /// [`crate::activator`]. Without this a plugin is preempted for the
+    /// host's own I/O latency and the supervisor charges it crash
+    /// budget for waiting on our database.
+    pub host_import_ticks: u64,
+}
+
+/// An event a plugin asked to emit, not yet delivered.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingEmit {
+    /// Topic the plugin published on.
+    pub topic: String,
+    /// Opaque payload.
+    pub payload: String,
 }
 
 impl HostState {
@@ -200,7 +229,23 @@ impl HostState {
             declared: PermissionSet::default(),
             granted: HashSet::new(),
             data_dir: None,
+            outbox: Vec::new(),
+            call_depth: 0,
+            host_import_ticks: 0,
         }
+    }
+
+    /// Records time spent inside a host import, in epoch ticks.
+    ///
+    /// Rounded up, so a sub-tick call still repays one and a plugin is
+    /// never charged for a host call that was merely fast.
+    pub fn charge_host_time(&mut self, elapsed: std::time::Duration) {
+        let ticks = elapsed
+            .as_millis()
+            .div_ceil(u128::from(crate::epoch::EPOCH_TICK_MS));
+        self.host_import_ticks = self
+            .host_import_ticks
+            .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX));
     }
 
     /// Attaches what the embedding shell provides.

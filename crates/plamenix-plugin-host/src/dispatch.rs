@@ -22,14 +22,24 @@
 //!   work can be queued into one plugin, so a slow subscriber applies
 //!   backpressure instead of accumulating an unbounded backlog.
 
+use std::collections::VecDeque;
 use std::time::Instant;
 
 use crate::concurrency::InFlightAcquireError;
 use crate::epoch::CallClass;
 use crate::event_bus::EventBus;
+use crate::host_impl::PendingEmit;
 use crate::instance::InstanceRegistry;
 use crate::supervisor::{ExitReason, RestartDecision, Supervisor};
 use crate::trap::{CallFailure, FailureKind};
+
+/// How many times an emitted event may itself be re-dispatched.
+///
+/// A plugin that emits the topic it subscribes to is a cycle, and the
+/// cap is what makes it terminate rather than livelock. Four hops is
+/// deep enough for a plugin to react to another plugin's reaction and
+/// shallow enough that nobody waits on it.
+pub const MAX_EMIT_DEPTH: u8 = 4;
 
 /// What happened when the host called one plugin's `handle-event`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,69 +84,122 @@ pub async fn dispatch_event(
     topic: &str,
     payload: &str,
 ) -> Vec<Delivery> {
-    let matched = bus.emit(topic);
-    let mut deliveries = Vec::with_capacity(matched.len());
+    let mut queue: VecDeque<(String, String, u8)> =
+        VecDeque::from([(topic.to_owned(), payload.to_owned(), 0)]);
+    let mut deliveries = Vec::new();
 
-    for subscriber in matched {
-        let plugin_id = subscriber.plugin_id;
-        let outcome = dispatch_one(registry, &plugin_id, topic, payload).await;
-        if let DispatchOutcome::Failed(ref failure) = outcome {
-            tracing::warn!(
-                plugin = %plugin_id,
-                topic,
-                kind = %failure.kind,
-                message = %failure.message,
-                "plugin failed to handle event",
+    // Breadth-first over the cascade, iterative rather than recursive:
+    // an async fn that calls itself needs boxing, and the depth here is
+    // driven by what plugins do.
+    while let Some((topic, payload, depth)) = queue.pop_front() {
+        for subscriber in bus.emit(&topic) {
+            let plugin_id = subscriber.plugin_id;
+            let (outcome, emitted) =
+                dispatch_one(registry, &plugin_id, &topic, &payload, depth).await;
+            if let DispatchOutcome::Failed(ref failure) = outcome {
+                tracing::warn!(
+                    plugin = %plugin_id,
+                    topic = %topic,
+                    kind = %failure.kind,
+                    message = %failure.message,
+                    "plugin failed to handle event",
+                );
+            }
+            deliveries.push(Delivery { plugin_id, outcome });
+
+            if depth >= MAX_EMIT_DEPTH {
+                if !emitted.is_empty() {
+                    tracing::warn!(
+                        topic = %topic,
+                        depth,
+                        dropped = emitted.len(),
+                        "cascade hit the depth cap; dropping what it emitted",
+                    );
+                }
+                continue;
+            }
+            queue.extend(
+                emitted
+                    .into_iter()
+                    .map(|emit| (emit.topic, emit.payload, depth + 1)),
             );
         }
-        deliveries.push(Delivery { plugin_id, outcome });
     }
 
     deliveries
 }
 
+/// Calls one plugin, and returns whatever it asked to emit.
+///
+/// The emits come back rather than being dispatched here because this
+/// function holds the plugin's store for the whole call. Delivering
+/// inline would re-lock a store that is already locked — for a plugin
+/// subscribed to its own topic, its own — and `tokio::sync::Mutex` is
+/// not reentrant, so the task would block forever with no epoch
+/// deadline to break it, because no wasm would be executing.
 async fn dispatch_one(
     registry: &InstanceRegistry,
     plugin_id: &str,
     topic: &str,
     payload: &str,
-) -> DispatchOutcome {
+    depth: u8,
+) -> (DispatchOutcome, Vec<PendingEmit>) {
     let instance = match registry.get(plugin_id) {
         Ok(Some(instance)) => instance,
-        // A poisoned registry lock is reported against the plugin
-        // rather than propagated: the other subscribers are unaffected
-        // and should still receive the event.
-        Ok(None) => return DispatchOutcome::NotInstantiated,
+        // Subscriptions are recorded from the manifest before anything
+        // is instantiated, so a UI-only plugin legitimately appears
+        // here with no store to call.
+        Ok(None) => return (DispatchOutcome::NotInstantiated, Vec::new()),
         // A poisoned lock is the host's problem, not the guest's, so it
         // is not reported as a trap.
         Err(err) => {
-            return DispatchOutcome::Failed(CallFailure {
-                kind: FailureKind::Host,
-                message: err.to_string(),
-            });
+            return (
+                DispatchOutcome::Failed(CallFailure {
+                    kind: FailureKind::Host,
+                    message: err.to_string(),
+                }),
+                Vec::new(),
+            );
         }
     };
 
     let _permit = match instance.acquire_call_permit().await {
         Ok(permit) => permit,
-        Err(InFlightAcquireError::Closed) => return DispatchOutcome::Closed,
+        Err(InFlightAcquireError::Closed) => return (DispatchOutcome::Closed, Vec::new()),
     };
 
     let mut store = instance.lock_store().await;
+    {
+        let state = store.data_mut();
+        state.call_depth = depth;
+        state.outbox.clear();
+        state.host_import_ticks = 0;
+        // Once per call rather than once per import: grants live behind
+        // a lock in the shell, and a call that saw a permission appear
+        // halfway through would be harder to reason about.
+        state.refresh_grants();
+    }
     // Set per call, not once at activation: a deadline is spent when it
     // passes, so a store that has already been preempted would enter
     // its next call with no budget at all.
     store.set_epoch_deadline(CallClass::Interactive.deadline_ticks());
 
-    match instance
+    let result = instance
         .bindings()
         .plamenix_plugin_plugin()
         .call_handle_event(&mut *store, topic, payload)
-        .await
-    {
+        .await;
+
+    let emitted = std::mem::take(&mut store.data_mut().outbox);
+    // Released before the caller can re-dispatch anything this plugin
+    // emitted. The ordering is the whole design.
+    drop(store);
+
+    let outcome = match result {
         Ok(()) => DispatchOutcome::Delivered,
         Err(err) => DispatchOutcome::Failed(CallFailure::from_error(&err)),
-    }
+    };
+    (outcome, emitted)
 }
 
 /// A [`Delivery`] plus, when the plugin failed, what the supervisor

@@ -233,6 +233,28 @@ pub fn parse_world_identifier(world: &str) -> Result<PluginWorld, PluginError> {
         })
 }
 
+/// The lowest world that exposes a WIT interface, by its qualified
+/// name (`plamenix:plugin/db`).
+///
+/// Used to turn wasmtime's "not found in the linker" into advice: a
+/// plugin that imported more than its world allows should be told which
+/// world would have worked, not left reading a message that sounds like
+/// the host is broken.
+#[must_use]
+pub fn world_exposing(interface: &str) -> Option<PluginWorld> {
+    let name = interface.strip_prefix("plamenix:plugin/")?;
+    match name {
+        "host" => Some(PluginWorld::Minimal),
+        "db" => Some(PluginWorld::DbReader),
+        "db-write" => Some(PluginWorld::DbWriter),
+        "fs" | "net" | "event-bus" | "settings" | "command" | "clipboard" => {
+            Some(PluginWorld::Integrated)
+        }
+        "notify" | "keyring" => Some(PluginWorld::IntegratedDesktop),
+        _ => None,
+    }
+}
+
 /// Refuses capabilities the declared world cannot exercise.
 ///
 /// Checks required and optional permissions alike. An optional

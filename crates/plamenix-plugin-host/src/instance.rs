@@ -125,12 +125,28 @@ impl PluginInstance {
         &self.bindings
     }
 
+    /// Takes the store lock if it is free, and gives up if it is not.
+    ///
+    /// For callers that might already be inside a call on this same
+    /// plugin — a shell command router reached from `command.invoke`,
+    /// most obviously. [`lock_store`](Self::lock_store) would block
+    /// forever there: the lock is not reentrant, and no epoch deadline
+    /// can break the wait because no wasm is executing while the host
+    /// is blocked. A `None` that the caller turns into "plugin busy" is
+    /// the difference between a bad error and a dead plugin.
+    pub fn try_lock_store(&self) -> Option<tokio::sync::MutexGuard<'_, Store<HostState>>> {
+        self.store.try_lock().ok()
+    }
+
     /// Locks the store for an exclusive plugin call.
     ///
     /// Returns a guard that derefs to `Store<HostState>`. Hold the
     /// guard across exactly one plugin call site — wasmtime's async
     /// store API requires `&mut Store` per call and rejects nested
     /// re-entry.
+    ///
+    /// Never call this from inside a host import. The import already
+    /// runs under this lock; see [`try_lock_store`](Self::try_lock_store).
     pub async fn lock_store(&self) -> tokio::sync::MutexGuard<'_, Store<HostState>> {
         self.store.lock().await
     }

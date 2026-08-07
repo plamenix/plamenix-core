@@ -58,7 +58,8 @@ pub use activator::{
 pub use capability::{LogicalDir, OsKeyring, Permission, PermissionGrant, PermissionSet};
 pub use concurrency::{CallPermit, InFlightAcquireError, InFlightLimiter, MAX_IN_FLIGHT_DEFAULT};
 pub use dispatch::{
-    Delivery, DispatchOutcome, SupervisedDelivery, dispatch_event, dispatch_event_supervised,
+    Delivery, DispatchOutcome, MAX_EMIT_DEPTH, SupervisedDelivery, dispatch_event,
+    dispatch_event_supervised,
 };
 pub use epoch::{
     BACKGROUND_DEADLINE_MS, CallClass, EPOCH_TICK_MS, EpochTicker, INTERACTIVE_DEADLINE_MS,
@@ -67,7 +68,9 @@ pub use error::PluginError;
 pub use event_bus::{EventBus, MatchedSubscriber, matches_pattern, tokenise_pattern};
 pub use gate::{Denial, Guard};
 pub use host::PluginHost;
-pub use host_impl::{HostState, LogLevel, LogSink, RecordedLog, SessionSlot, register_host};
+pub use host_impl::{
+    HostState, LogLevel, LogSink, PendingEmit, RecordedLog, SessionSlot, register_host,
+};
 pub use instance::{InstanceRegistry, PluginInstance};
 pub use interceptor::{
     ExtensionPoint, Interception, InterceptorRegistration, InterceptorRegistry, MAX_PRIORITY,

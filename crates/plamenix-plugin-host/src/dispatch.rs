@@ -29,6 +29,7 @@ use crate::epoch::CallClass;
 use crate::event_bus::EventBus;
 use crate::instance::InstanceRegistry;
 use crate::supervisor::{ExitReason, RestartDecision, Supervisor};
+use crate::trap::{CallFailure, FailureKind};
 
 /// What happened when the host called one plugin's `handle-event`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,8 +42,9 @@ pub enum DispatchOutcome {
     /// instantiated.
     NotInstantiated,
     /// The call trapped, exceeded its deadline, or the plugin panicked.
-    /// Carries the engine's message for the supervisor to record.
-    Failed(String),
+    /// Carries the classified reason — see [`crate::trap::CallFailure`]
+    /// for why the reason has to be extracted rather than stringified.
+    Failed(CallFailure),
     /// The plugin is shutting down and is no longer accepting calls.
     Closed,
 }
@@ -78,8 +80,14 @@ pub async fn dispatch_event(
     for subscriber in matched {
         let plugin_id = subscriber.plugin_id;
         let outcome = dispatch_one(registry, &plugin_id, topic, payload).await;
-        if let DispatchOutcome::Failed(ref message) = outcome {
-            tracing::warn!(plugin = %plugin_id, topic, message, "plugin failed to handle event");
+        if let DispatchOutcome::Failed(ref failure) = outcome {
+            tracing::warn!(
+                plugin = %plugin_id,
+                topic,
+                kind = %failure.kind,
+                message = %failure.message,
+                "plugin failed to handle event",
+            );
         }
         deliveries.push(Delivery { plugin_id, outcome });
     }
@@ -99,7 +107,14 @@ async fn dispatch_one(
         // rather than propagated: the other subscribers are unaffected
         // and should still receive the event.
         Ok(None) => return DispatchOutcome::NotInstantiated,
-        Err(err) => return DispatchOutcome::Failed(err.to_string()),
+        // A poisoned lock is the host's problem, not the guest's, so it
+        // is not reported as a trap.
+        Err(err) => {
+            return DispatchOutcome::Failed(CallFailure {
+                kind: FailureKind::Host,
+                message: err.to_string(),
+            });
+        }
     };
 
     let _permit = match instance.acquire_call_permit().await {
@@ -120,7 +135,7 @@ async fn dispatch_one(
         .await
     {
         Ok(()) => DispatchOutcome::Delivered,
-        Err(err) => DispatchOutcome::Failed(err.to_string()),
+        Err(err) => DispatchOutcome::Failed(CallFailure::from_error(&err)),
     }
 }
 

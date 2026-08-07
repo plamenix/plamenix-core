@@ -44,6 +44,7 @@ pub mod manifest;
 pub mod plx;
 pub mod signing;
 pub mod supervisor;
+pub mod trap;
 
 pub use activator::{
     ActivationOutcome, activate, activate_into_registry, activate_with_state,
@@ -85,3 +86,4 @@ pub use supervisor::{
     CrashBudget, CrashBudgetState, DisableReason, ExitReason, PluginStatus, PluginSupervisionState,
     RestartDecision, Supervisor,
 };
+pub use trap::{CallFailure, FailureKind};

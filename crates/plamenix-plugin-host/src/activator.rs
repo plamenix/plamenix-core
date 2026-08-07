@@ -24,6 +24,7 @@ use crate::host::PluginHost;
 use crate::host_impl::{HostState, register_host};
 use crate::instance::{InstanceRegistry, PluginInstance};
 use crate::loader::StagedPlugin;
+use crate::trap::CallFailure;
 
 /// Outcome of calling a plugin's `activate` export.
 ///
@@ -108,13 +109,13 @@ pub async fn activate_with_state(
 
     let bindings = PluginMinimal::instantiate_async(&mut store, component, &linker)
         .await
-        .map_err(|err| PluginError::Runtime(err.to_string()))?;
+        .map_err(|err| PluginError::Runtime(CallFailure::from_error(&err).to_string()))?;
 
     let activation = bindings
         .plamenix_plugin_plugin()
         .call_activate(&mut store)
         .await
-        .map_err(|err| PluginError::Runtime(err.to_string()))?;
+        .map_err(|err| PluginError::Runtime(CallFailure::from_error(&err).to_string()))?;
 
     Ok(ActivationOutcome::from(activation))
 }
@@ -181,13 +182,13 @@ pub async fn activate_into_registry(
 
     let bindings = PluginMinimal::instantiate_async(&mut store, component, &linker)
         .await
-        .map_err(|err| PluginError::Runtime(err.to_string()))?;
+        .map_err(|err| PluginError::Runtime(CallFailure::from_error(&err).to_string()))?;
 
     let activation = bindings
         .plamenix_plugin_plugin()
         .call_activate(&mut store)
         .await
-        .map_err(|err| PluginError::Runtime(err.to_string()))?;
+        .map_err(|err| PluginError::Runtime(CallFailure::from_error(&err).to_string()))?;
 
     let outcome = ActivationOutcome::from(activation);
     if matches!(outcome, ActivationOutcome::Ok) {

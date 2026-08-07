@@ -172,6 +172,11 @@ pub struct HostState {
     /// one. Every `fs` path resolves inside this and nowhere else.
     /// `None` means the plugin has no filesystem at all.
     pub data_dir: Option<PathBuf>,
+    /// The plugin's own key/value settings, loaded from its data
+    /// directory at activation and written through on change. Held in
+    /// memory because a `get` should not be a blocking file read on a
+    /// tokio worker; bounded because settings are not bulk storage.
+    pub settings: std::collections::BTreeMap<String, String>,
     /// Events the plugin asked to emit during the call in progress.
     ///
     /// Queued rather than delivered, because the host is holding this
@@ -229,6 +234,7 @@ impl HostState {
             declared: PermissionSet::default(),
             granted: HashSet::new(),
             data_dir: None,
+            settings: std::collections::BTreeMap::new(),
             outbox: Vec::new(),
             call_depth: 0,
             host_import_ticks: 0,
@@ -281,8 +287,23 @@ impl HostState {
     /// plugin ends up with no filesystem rather than the host's.
     #[must_use]
     pub fn with_data_dir(mut self, data_dir: impl Into<PathBuf>) -> Self {
-        self.data_dir = Some(data_dir.into());
+        let dir = data_dir.into();
+        self.settings = crate::imports::settings::load(Some(&dir));
+        self.data_dir = Some(dir);
         self
+    }
+
+    /// Who the host is acting for, for a call into
+    /// [`crate::services::HostServices`].
+    ///
+    /// The session is the host's own view, never a value the plugin
+    /// supplied — see [`crate::services::CallCtx::session_id`].
+    #[must_use]
+    pub fn call_ctx(&self) -> crate::services::CallCtx {
+        crate::services::CallCtx {
+            plugin_id: self.plugin_id.clone(),
+            session_id: self.current_session(),
+        }
     }
 
     /// Re-reads the user's grants from the shell.

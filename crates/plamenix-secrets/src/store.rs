@@ -153,10 +153,11 @@ fn poisoned<T>(_err: T) -> SecretError {
     SecretError::Backend("in-memory store mutex poisoned".into())
 }
 
-/// Plain-text JSON-on-disk [`SecretStore`]. Intended for dev / debug
-/// builds on macOS where the OS keyring's ACL is bound to the binary
-/// hash, so every `cargo build` invalidates "Always Allow" and pops a
-/// password prompt on every restart. Release builds keep using
+/// Plain-text JSON-on-disk [`SecretStore`], for dev / debug builds only.
+///
+/// It exists because on macOS the OS keyring's ACL is bound to the
+/// binary hash, so every `cargo build` invalidates "Always Allow" and
+/// pops a password prompt on every restart. Release builds keep using
 /// [`KeyringStore`].
 ///
 /// Storage is intentionally plain JSON — these are local-dev secrets on
@@ -246,7 +247,11 @@ impl SecretStore for JsonSecretStore {
     fn store(&self, secret_ref: &SecretRef, secret: &str) -> Result<(), SecretError> {
         let mut entries = self.entries.lock().map_err(poisoned)?;
         entries.insert(secret_ref.clone(), secret.to_owned());
+        // The lock is held across the flush on purpose: `flush` writes
+        // the whole map, so releasing it first would let a concurrent
+        // writer put the file and the map out of step.
         self.flush(&entries)?;
+        drop(entries);
         Ok(())
     }
 
@@ -266,6 +271,7 @@ impl SecretStore for JsonSecretStore {
         if entries.remove(secret_ref).is_some() {
             self.flush(&entries)?;
         }
+        drop(entries);
         Ok(())
     }
 }

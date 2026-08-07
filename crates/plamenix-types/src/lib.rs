@@ -148,7 +148,7 @@ pub struct ConnectionConfig {
     /// `isc_attach_database` and clears the slot once the attach
     /// settles, so the bytes do not stay resident between sessions.
     ///
-    /// A KeyHolder plugin (e.g. IBSurgeon EPF) configured on the
+    /// A `KeyHolder` plugin (e.g. `IBSurgeon` EPF) configured on the
     /// fbclient install can still supply keys via its own
     /// `fbcrypt.conf`; both paths coexist and the callback wins when
     /// both are present (Firebird checks the registered callback
@@ -345,7 +345,7 @@ pub struct TestConnectionResult {
 #[derive(Clone, Debug, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryEntry {
-    /// Auto-incrementing primary key from the local SQLite store.
+    /// Auto-incrementing primary key from the local `SQLite` store.
     pub id: i64,
     /// Profile this entry belongs to.
     pub profile_id: String,
@@ -377,10 +377,11 @@ pub struct DatabaseAlias {
     pub path: String,
 }
 
-/// Result of `db_list_aliases`. `source_path` is the path of the parsed
-/// `databases.conf`, or `None` when no candidate file was found on the
-/// local filesystem (e.g. when the IDE is running on a different host
-/// than the Firebird server).
+/// Result of `db_list_aliases`.
+///
+/// `source_path` is the path of the parsed `databases.conf`, or `None`
+/// when no candidate file was found on the local filesystem (e.g. when
+/// the IDE is running on a different host than the Firebird server).
 #[derive(Clone, Debug, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ListAliasesResult {

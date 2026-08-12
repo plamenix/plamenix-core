@@ -92,3 +92,33 @@ fn a_capability_round_trips_through_display() {
         );
     }
 }
+
+/// Every world the WIT declares must be one the host knows how to link.
+///
+/// The two drift in opposite directions and both are silent. A world in
+/// the WIT that `PluginWorld` does not know is a world an author can
+/// legitimately target and the host will refuse. A `PluginWorld` variant
+/// with no WIT world is a tier nothing can ever declare.
+#[test]
+fn the_wit_worlds_and_the_host_worlds_are_the_same_set() {
+    use plamenix_plugin_host::PluginWorld;
+
+    let mut in_wit: Vec<String> = WIT
+        .lines()
+        .filter_map(|line| line.strip_prefix("world "))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .map(str::to_owned)
+        .collect();
+    in_wit.sort();
+
+    let mut known: Vec<String> = PluginWorld::all()
+        .iter()
+        .map(|world| world.name().to_owned())
+        .collect();
+    known.sort();
+
+    assert_eq!(
+        in_wit, known,
+        "the shipped WIT and `PluginWorld` disagree about which worlds exist",
+    );
+}

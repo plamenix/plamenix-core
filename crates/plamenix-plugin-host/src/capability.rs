@@ -27,11 +27,8 @@ use crate::error::PluginError;
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum Permission {
     DbReadAny,
-    DbReadTable(String),
     DbWriteAny,
-    DbWriteTable(String),
     DbDdlAny,
-    DbDdlTable(String),
     DbSchemaList,
     DbSchemaDescribe,
     ExportFormat,
@@ -45,7 +42,6 @@ pub enum Permission {
     ClipboardRead,
     ClipboardWrite,
     OsNotify,
-    OsOpenUrl,
     /// Read this plugin's own settings.
     SettingsRead,
     /// Write this plugin's own settings.
@@ -159,11 +155,29 @@ impl Permission {
         let parts: Vec<&str> = raw.split('.').collect();
         match parts.as_slice() {
             ["db", "read", "any"] => Ok(Self::DbReadAny),
-            ["db", "read", "table", name] => Ok(Self::DbReadTable((*name).to_owned())),
+            // Table-scoped db capabilities are refused rather than
+            // accepted. Enforcing them means knowing which tables a
+            // statement touches, which means parsing SQL; accepting
+            // them ungated would grant everything while naming one
+            // table. They used to parse, which was the worst of the
+            // three: the install dialog asked the user to approve
+            // `db.read.table.CUSTOMERS`, they approved it, and then
+            // every db call was denied because no call site accepts
+            // that form.
+            ["db", "read", "table", _] => Err(PluginError::InvalidCapability(
+                raw.to_owned(),
+                "table-scoped db capabilities are not enforceable; declare `db.read.any`",
+            )),
             ["db", "write", "any"] => Ok(Self::DbWriteAny),
-            ["db", "write", "table", name] => Ok(Self::DbWriteTable((*name).to_owned())),
+            ["db", "write", "table", _] => Err(PluginError::InvalidCapability(
+                raw.to_owned(),
+                "table-scoped db capabilities are not enforceable; declare `db.write.any`",
+            )),
             ["db", "ddl", "any"] => Ok(Self::DbDdlAny),
-            ["db", "ddl", "table", name] => Ok(Self::DbDdlTable((*name).to_owned())),
+            ["db", "ddl", "table", _] => Err(PluginError::InvalidCapability(
+                raw.to_owned(),
+                "table-scoped db capabilities are not enforceable; declare `db.ddl.any`",
+            )),
             ["db", "schema", "list"] => Ok(Self::DbSchemaList),
             ["db", "schema", "describe"] => Ok(Self::DbSchemaDescribe),
             ["export", "format"] => Ok(Self::ExportFormat),
@@ -179,7 +193,6 @@ impl Permission {
             ["clipboard", "read"] => Ok(Self::ClipboardRead),
             ["clipboard", "write"] => Ok(Self::ClipboardWrite),
             ["os", "notify"] => Ok(Self::OsNotify),
-            ["os", "open-url"] => Ok(Self::OsOpenUrl),
             ["settings", "read"] => Ok(Self::SettingsRead),
             ["settings", "write"] => Ok(Self::SettingsWrite),
             ["command", "invoke"] => Ok(Self::CommandInvoke),
@@ -205,11 +218,8 @@ impl fmt::Display for Permission {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DbReadAny => f.write_str("db.read.any"),
-            Self::DbReadTable(name) => write!(f, "db.read.table.{name}"),
             Self::DbWriteAny => f.write_str("db.write.any"),
-            Self::DbWriteTable(name) => write!(f, "db.write.table.{name}"),
             Self::DbDdlAny => f.write_str("db.ddl.any"),
-            Self::DbDdlTable(name) => write!(f, "db.ddl.table.{name}"),
             Self::DbSchemaList => f.write_str("db.schema.list"),
             Self::DbSchemaDescribe => f.write_str("db.schema.describe"),
             Self::ExportFormat => f.write_str("export.format"),
@@ -223,7 +233,6 @@ impl fmt::Display for Permission {
             Self::ClipboardRead => f.write_str("clipboard.read"),
             Self::ClipboardWrite => f.write_str("clipboard.write"),
             Self::OsNotify => f.write_str("os.notify"),
-            Self::OsOpenUrl => f.write_str("os.open-url"),
             Self::SettingsRead => f.write_str("settings.read"),
             Self::SettingsWrite => f.write_str("settings.write"),
             Self::CommandInvoke => f.write_str("command.invoke"),

@@ -207,8 +207,8 @@ interface db {
         // own interfaces extend the read surface; kept minimal here.
     }
 
-    /// Read-only catalogue introspection. Capability: `db:schema.list`
-    /// + `db:schema.describe`.
+    /// Read-only catalogue introspection. Capability: `db.schema.list`
+    /// + `db.schema.describe`.
     describe-schema: func(session-id: string) -> result<schema, db-error>;
 
     /// Returns the current foreground session id if a tab is active.
@@ -295,18 +295,18 @@ interface fs {
         invalid-path(string),
     }
 
-    /// Read all bytes from a file. Capability: `fs:read:plugin-data`.
+    /// Read all bytes from a file. Capability: `fs.read.dir.plugin-data`.
     read-file: func(path: string) -> result<list<u8>, fs-error>;
 
     /// Write (creating or truncating) a file with the supplied bytes.
-    /// Capability: `fs:write:plugin-data`.
+    /// Capability: `fs.write.dir.plugin-data`.
     write-file: func(path: string, contents: list<u8>) -> result<_, fs-error>;
 
     /// List entries in a directory (filenames only, non-recursive).
-    /// Capability: `fs:read:plugin-data`.
+    /// Capability: `fs.read.dir.plugin-data`.
     list-dir: func(path: string) -> result<list<string>, fs-error>;
 
-    /// Remove a file. Capability: `fs:write:plugin-data`.
+    /// Remove a file. Capability: `fs.write.dir.plugin-data`.
     remove-file: func(path: string) -> result<_, fs-error>;
 }
 
@@ -345,7 +345,7 @@ interface net {
     }
 
     /// Issue an HTTPS request. The host validates the URL host against
-    /// the plugin's `net:fetch.https:<host>:<port>` capability set and
+    /// the plugin's `net.https.<host>` capability set and
     /// rejects mismatches before any socket opens.
     fetch: func(req: http-request) -> result<http-response, net-error>;
 }
@@ -431,7 +431,7 @@ interface command {
 
     /// Invoke a command by id. JSON-encoded args + return for v1; a
     /// typed surface may follow once concrete plugins exercise it.
-    /// Capability: `command:invoke`.
+    /// Capability: `command.invoke`.
     invoke: func(command-id: string, args-json: string) -> result<string, command-error>;
 }
 

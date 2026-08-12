@@ -97,10 +97,6 @@ ui = "ui.mjs"
 #[test]
 fn parses_scoped_capabilities() {
     assert_eq!(
-        Permission::parse("db.read.table.users").unwrap(),
-        Permission::DbReadTable("users".into()),
-    );
-    assert_eq!(
         Permission::parse("net.https.api.example.com").unwrap(),
         Permission::NetHttpsHost("api.example.com".into()),
     );
@@ -108,6 +104,45 @@ fn parses_scoped_capabilities() {
         Permission::parse("fs.read.dir.downloads").unwrap(),
         Permission::FsReadDir(LogicalDir::Downloads),
     );
+}
+
+#[test]
+fn refuses_table_scoped_db_capabilities_and_says_what_to_use() {
+    // They used to parse, and that was the worst of the three options:
+    // no call site accepts the table-scoped form, so the install dialog
+    // asked the user to approve `db.read.table.CUSTOMERS`, they
+    // approved it, and every db call was then denied. A capability a
+    // user can grant that grants nothing makes the permissions dialog
+    // assert something false.
+    //
+    // Enforcing them properly means knowing which tables a statement
+    // touches, which means parsing SQL. Accepting them ungated would
+    // grant everything while naming one table. So they are refused, and
+    // the message names the capability the author should declare.
+    for (input, suggested) in [
+        ("db.read.table.CUSTOMERS", "db.read.any"),
+        ("db.write.table.CUSTOMERS", "db.write.any"),
+        ("db.ddl.table.CUSTOMERS", "db.ddl.any"),
+    ] {
+        let err = Permission::parse(input).expect_err("must be refused");
+        let PluginError::InvalidCapability(cap, reason) = err else {
+            panic!("unexpected variant for {input}");
+        };
+        assert_eq!(cap, input);
+        assert!(
+            reason.contains(suggested),
+            "refusing `{input}` should point the author at `{suggested}`, said: {reason}",
+        );
+    }
+}
+
+#[test]
+fn refuses_a_capability_nothing_implements() {
+    // `os.open-url` was in the grammar and in the world tiering, and
+    // had no host import and no call-site gate anywhere in the
+    // workspace. Same defect as the table scopes: approvable, and
+    // worthless once approved.
+    assert!(Permission::parse("os.open-url").is_err());
 }
 
 #[test]

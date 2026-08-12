@@ -94,15 +94,11 @@ impl PluginWorld {
         let tier = match permission {
             // `db` interface.
             Permission::DbReadAny
-            | Permission::DbReadTable(_)
             | Permission::DbSchemaList
             | Permission::DbSchemaDescribe
             | Permission::DbSessionContextRead => Self::DbReader,
             // `db-write` interface.
-            Permission::DbWriteAny
-            | Permission::DbWriteTable(_)
-            | Permission::DbDdlAny
-            | Permission::DbDdlTable(_) => Self::DbWriter,
+            Permission::DbWriteAny | Permission::DbDdlAny => Self::DbWriter,
             // Contribution capabilities, not import-backed ones.
             // `export.format` and `import.source` say the plugin
             // *provides* something the host will call into; they are
@@ -118,7 +114,6 @@ impl PluginWorld {
             | Permission::FsWriteDir(_)
             | Permission::ClipboardRead
             | Permission::ClipboardWrite
-            | Permission::OsOpenUrl
             | Permission::SettingsRead
             | Permission::SettingsWrite
             | Permission::CommandInvoke

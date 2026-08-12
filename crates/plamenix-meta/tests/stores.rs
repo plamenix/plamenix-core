@@ -206,7 +206,10 @@ async fn history_is_trimmed_to_its_cap() {
     };
 
     for i in 0..10 {
-        store.record_history(&entry("p1", "SELECT 1", i)).await.unwrap();
+        store
+            .record_history(&entry("p1", "SELECT 1", i))
+            .await
+            .unwrap();
     }
     store.trim_history("p1", 4).await.unwrap();
 
@@ -222,7 +225,10 @@ async fn trimming_below_the_cap_removes_nothing() {
         println!("SKIPPED: bundled fbclient not found");
         return;
     };
-    store.record_history(&entry("p1", "SELECT 1", 1)).await.unwrap();
+    store
+        .record_history(&entry("p1", "SELECT 1", 1))
+        .await
+        .unwrap();
     assert_eq!(store.trim_history("p1", 50).await.unwrap(), 0);
     assert_eq!(store.list_history("p1", 10).await.unwrap().len(), 1);
 }

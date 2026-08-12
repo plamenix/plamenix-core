@@ -316,11 +316,8 @@ impl HostState {
                 matches!(
                     grant.capability,
                     crate::capability::Permission::DbReadAny
-                        | crate::capability::Permission::DbReadTable(_)
                         | crate::capability::Permission::DbWriteAny
-                        | crate::capability::Permission::DbWriteTable(_)
                         | crate::capability::Permission::DbDdlAny
-                        | crate::capability::Permission::DbDdlTable(_)
                         | crate::capability::Permission::DbSchemaList
                         | crate::capability::Permission::DbSchemaDescribe
                         | crate::capability::Permission::NetHttps

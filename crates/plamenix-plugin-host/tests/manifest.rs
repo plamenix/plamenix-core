@@ -368,3 +368,71 @@ event_subscriptions = [""]
         "expected event_subscriptions validation error, got: {msg}",
     );
 }
+
+#[test]
+fn an_unknown_contribution_key_is_refused_rather_than_ignored() {
+    // `plugin-manifest.md` promised this and the code did not do it,
+    // which is the worse of the two possible mistakes. Both docs showed
+    // a `[contributions.ui]` section; neither has ever existed. An
+    // author copying it got a manifest that parsed cleanly, a plugin
+    // that contributed nothing, and no error anywhere saying why.
+    let toml = r#"
+[plugin]
+id = "dev.plamenix.typo"
+name = "Typo"
+version = "1.0.0"
+plamenix_min_version = ">=1.0.0-beta"
+plugin_api = "1.0"
+world = "plamenix:plugin@1.0.0/plugin-minimal"
+
+[entry_points]
+ui = "ui.mjs"
+
+[contributions.ui]
+sidebar_panels = []
+"#;
+    let err = Manifest::parse(toml).expect_err("an unknown contribution key must be refused");
+    let message = err.to_string();
+    assert!(
+        message.contains("ui") || message.contains("unknown"),
+        "the refusal should name what it did not recognise, said: {message}",
+    );
+}
+
+#[test]
+fn the_real_contribution_keys_still_parse() {
+    // Guards the guard: `deny_unknown_fields` refusing something real
+    // would be a worse failure than the one it prevents.
+    let toml = r#"
+[plugin]
+id = "dev.plamenix.contributor"
+name = "Contributor"
+version = "1.0.0"
+plamenix_min_version = ">=1.0.0-beta"
+plugin_api = "1.0"
+world = "plamenix:plugin@1.0.0/plugin-db-reader"
+
+[permissions]
+required = [{ capability = "db.read.any" }]
+
+[entry_points]
+wasm = "plugin.wasm"
+
+[contributions]
+event_subscriptions = ["query/executed"]
+
+[[contributions.sidebar_panels]]
+id = "panel"
+label = "Panel"
+
+[[contributions.interceptors]]
+extension_point = "query.executing"
+"#;
+    let manifest = Manifest::parse(toml).expect("the documented keys must parse");
+    assert_eq!(
+        manifest.contributions.event_subscriptions,
+        ["query/executed"]
+    );
+    assert_eq!(manifest.contributions.sidebar_panels.len(), 1);
+    assert_eq!(manifest.contributions.interceptors.len(), 1);
+}

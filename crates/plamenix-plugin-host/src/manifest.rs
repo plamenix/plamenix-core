@@ -104,6 +104,16 @@ pub struct Manifest {
 /// manifest entries so the host can render them without running the
 /// plugin first; the plugin's runtime half augments them with state.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+/// Unknown keys are refused rather than ignored.
+///
+/// `plugin-manifest.md` promised this and the code did not do it, which
+/// is the worse half of the two possible mistakes: a plugin author
+/// writing a contribution block from an outdated document got a
+/// manifest that parsed cleanly and a plugin that contributed nothing,
+/// with no error anywhere to say why. `[contributions.ui]` and
+/// `[contributions.db]` were both documented and neither has ever
+/// existed.
+#[serde(deny_unknown_fields)]
 pub struct Contributions {
     /// Side-panel contributions surfaced by the host's sidebar shell.
     #[serde(default)]

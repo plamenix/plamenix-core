@@ -281,3 +281,27 @@ async fn repeated_event_failures_exhaust_the_crash_budget() {
         "four abnormal exits inside the window must exhaust a 3-crash budget",
     );
 }
+
+#[test]
+fn the_bus_reports_what_is_subscribed_so_the_shell_can_forward_selectively() {
+    // Most shell events originate in the renderer, so reaching a WASM
+    // plugin costs a round trip per event. Forwarding everything would
+    // put `editor/changed` on the wire once per keystroke whether or not
+    // anything reads it, so the renderer asks what is worth sending.
+    let bus = EventBus::new();
+    assert!(bus.subscribed_patterns().is_empty());
+
+    bus.subscribe("a.plugin", "schema/**").unwrap();
+    bus.subscribe("b.plugin", "schema/**").unwrap();
+    bus.subscribe("b.plugin", "query/executed").unwrap();
+
+    // Deduplicated: two plugins watching one pattern is one thing to
+    // forward, not two.
+    assert_eq!(
+        bus.subscribed_patterns(),
+        vec!["query/executed".to_owned(), "schema/**".to_owned()],
+    );
+
+    bus.unsubscribe_by_plugin("b.plugin");
+    assert_eq!(bus.subscribed_patterns(), vec!["schema/**".to_owned()]);
+}

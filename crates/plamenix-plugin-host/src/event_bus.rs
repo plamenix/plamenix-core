@@ -202,6 +202,32 @@ impl EventBus {
         before - guard.subscriptions.len()
     }
 
+    /// Every distinct pattern anything is subscribed to.
+    ///
+    /// The renderer asks for this so it can forward only the events
+    /// some plugin actually wants. Most of the shell's events originate
+    /// in the UI — a tab opening, an editor gaining focus — so reaching
+    /// a WASM plugin means a round trip per event, and doing that for
+    /// events nobody subscribed to would put `editor/changed` on the
+    /// wire once per keystroke for no reader.
+    ///
+    /// Deduplicated: two plugins watching `schema/**` are one thing to
+    /// forward.
+    #[must_use]
+    pub fn subscribed_patterns(&self) -> Vec<String> {
+        let Ok(guard) = self.inner.lock() else {
+            return Vec::new();
+        };
+        let mut patterns: Vec<String> = guard
+            .subscriptions
+            .iter()
+            .map(|s| s.pattern.clone())
+            .collect();
+        patterns.sort();
+        patterns.dedup();
+        patterns
+    }
+
     /// Total subscription count across all plugins. Exposed for the
     /// supervisor's "X subscriptions held" debug summary + tests.
     #[must_use]

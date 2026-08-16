@@ -61,7 +61,7 @@ pub use capability::{LogicalDir, OsKeyring, Permission, PermissionGrant, Permiss
 pub use concurrency::{CallPermit, InFlightAcquireError, InFlightLimiter, MAX_IN_FLIGHT_DEFAULT};
 pub use dispatch::{
     Delivery, DispatchOutcome, MAX_EMIT_DEPTH, SupervisedDelivery, dispatch_event,
-    dispatch_event_supervised,
+    dispatch_event_supervised, required_capability_for_topic,
 };
 pub use epoch::{
     BACKGROUND_DEADLINE_MS, CallClass, EPOCH_TICK_MS, EpochTicker, INTERACTIVE_DEADLINE_MS,

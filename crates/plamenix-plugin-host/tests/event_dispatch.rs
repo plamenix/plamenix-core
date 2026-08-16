@@ -305,3 +305,47 @@ fn the_bus_reports_what_is_subscribed_so_the_shell_can_forward_selectively() {
     bus.unsubscribe_by_plugin("b.plugin");
     assert_eq!(bus.subscribed_patterns(), vec!["schema/**".to_owned()]);
 }
+
+#[test]
+fn topics_carrying_user_data_require_a_capability_to_receive() {
+    // Subscription is ungated on purpose — a manifest may declare any
+    // topic and nothing checks it. That is harmless for a tab id and
+    // was not for `query/executed`, whose payload carries the SQL the
+    // user ran. Until the shells forwarded UI events to the host bus,
+    // the only topic a plugin ever received was a statement *count*;
+    // once real events crossed, a plugin with no capabilities at all
+    // could read every statement by subscribing.
+    //
+    // The check is on payload content, not on the event's name:
+    // `editor/changed` carries the buffer the user is composing, which
+    // is a statement like any other.
+    for topic in [
+        "query/executed",
+        "query/failed",
+        "editor/changed",
+        "cell/committed",
+        "row/inserted",
+        "row/deleted",
+        "schema/described",
+    ] {
+        assert!(
+            plamenix_plugin_host::required_capability_for_topic(topic).is_some(),
+            "`{topic}` carries user data and must require a capability",
+        );
+    }
+
+    // Ids and UI facts a plugin could observe anyway.
+    for topic in [
+        "app/started",
+        "tab/opened",
+        "theme/changed",
+        "plugin/activated",
+        "export/started",
+        "connection/closed",
+    ] {
+        assert!(
+            plamenix_plugin_host::required_capability_for_topic(topic).is_none(),
+            "`{topic}` carries nothing privileged and should not need a grant",
+        );
+    }
+}

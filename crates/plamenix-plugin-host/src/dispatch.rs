@@ -25,8 +25,10 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
+use crate::capability::Permission;
 use crate::concurrency::InFlightAcquireError;
 use crate::event_bus::EventBus;
+use crate::gate::{self, Guard};
 use crate::host_impl::PendingEmit;
 use crate::instance::InstanceRegistry;
 use crate::supervisor::{ExitReason, RestartDecision, Supervisor};
@@ -56,6 +58,44 @@ pub enum DispatchOutcome {
     Failed(CallFailure),
     /// The plugin is shutting down and is no longer accepting calls.
     Closed,
+    /// The plugin subscribed to a topic whose payload carries something
+    /// it has no capability to see. Carries the capability it would
+    /// need.
+    ///
+    /// Not a fault of the plugin's — declaring a subscription is free,
+    /// and the host is the one that decides what a topic contains — so
+    /// this does not consume crash budget.
+    NotPermitted(String),
+}
+
+/// The capability a topic's payload implies, if any.
+///
+/// Subscription is not gated: a manifest may declare any topic, and
+/// nothing checks it. That is fine for a topic carrying a tab id and
+/// wrong for one carrying the user's SQL, so the check happens here, at
+/// delivery, where the grants are known.
+///
+/// The list is about *payload content*, not about what the event is
+/// named after. `editor/changed` carries the editor buffer, which is a
+/// statement the user is composing, so it needs what reading their
+/// statements needs.
+pub fn required_capability_for_topic(topic: &str) -> Option<Guard> {
+    let area = topic.split('/').next().unwrap_or_default();
+    match area {
+        // `sql` text, and for the row events the table, keys and values.
+        "query" | "editor" | "cell" | "row" => {
+            Some(Guard::Any(&[Permission::DbReadAny, Permission::DbWriteAny]))
+        }
+        // Object names, columns, and generated DDL.
+        "schema" => Some(Guard::Any(&[
+            Permission::DbSchemaList,
+            Permission::DbSchemaDescribe,
+            Permission::DbReadAny,
+        ])),
+        // Lifecycle, tabs, theme, settings, exports, plugin state: ids
+        // and UI facts, nothing a plugin could not observe anyway.
+        _ => None,
+    }
 }
 
 /// One subscriber's result.
@@ -177,6 +217,21 @@ async fn dispatch_one(
         // a lock in the shell, and a call that saw a permission appear
         // halfway through would be harder to reason about.
         state.refresh_grants();
+    }
+
+    // Checked after the grants are refreshed and before the plugin is
+    // called, so a topic carrying the user's SQL never reaches a plugin
+    // that could not have asked for it.
+    //
+    // Subscription itself is ungated — a manifest may declare any topic
+    // — which is harmless for a tab id and was not for statement text.
+    if let Some(guard) = required_capability_for_topic(topic) {
+        if let Err(denial) = gate::check(store.data(), &guard) {
+            return (
+                DispatchOutcome::NotPermitted(denial.to_string()),
+                Vec::new(),
+            );
+        }
     }
     // Set per call, not once at activation: a deadline is spent when it
     // passes, so a store that has already been preempted would enter

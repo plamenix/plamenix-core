@@ -61,6 +61,24 @@ pub fn set_key(bytes: &[u8]) {
     }
 }
 
+/// Serialises the window between staging a key and completing the
+/// attach that consumes it.
+///
+/// The key slot is process-global because the engine's crypt callback
+/// is: one callback per process, reading one slot. So two connects to
+/// two encrypted databases could interleave — the second `set_key`
+/// landing between the first's `set_key` and its attach — and the first
+/// database would be handed the second's key. It fails to attach, which
+/// is the good outcome; the bad one is that it succeeds because the
+/// databases share a key and the user learns nothing about which key
+/// was actually used.
+///
+/// Held across the attach rather than just the write, since the attach
+/// is what reads the slot. Encrypted connects are rare and a user does
+/// not open two at once by accident, so serialising them costs nothing
+/// anyone will notice.
+pub static ATTACH_GATE: Mutex<()> = Mutex::new(());
+
 /// Clears the process-global key slot. Hosts call this after a
 /// successful attach (or any attach failure) so the bytes do not
 /// remain in memory between sessions.

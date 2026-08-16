@@ -238,72 +238,95 @@ impl DbDriver for RsfbDriver {
         mode: ConnectMode,
     ) -> Result<SessionId, DbError> {
         let encryption_required = config.encryption_required;
-        // Wire the user-supplied key into fbclient's runtime callback
-        // before the attach handshake fires. Native mode only — the
-        // pure-Rust backend never loads fbclient. rsfbclient 0.26
-        // doesn't expose `fb_database_crypt_callback`, so the bridge
-        // in `crate::crypt_callback` dlopens the same library
-        // rsfbclient uses and registers a Rust callback that reads
-        // from a process-global key slot.
-        #[cfg(feature = "native")]
-        if matches!(mode, ConnectMode::Native)
-            && let Some(key) = config.encryption_key.as_deref()
-            && !key.is_empty()
-        {
-            let resolved = crate::rsfb::resolver::resolve_fbclient_path(&config);
-            match resolved {
-                Some(path) => {
-                    if let Err(err) = crate::crypt_callback::register_with(&path) {
-                        tracing::warn!(
-                            ?err,
-                            "could not register fbclient crypt callback; \
-                             database attach will rely on KeyHolder plugins instead",
-                        );
-                    } else {
-                        crate::crypt_callback::set_key(key.as_bytes());
-                    }
-                }
-                None => {
-                    tracing::warn!(
-                        "encryption_key supplied but no fbclient path resolved; \
-                         set PLAMENIX_FBCLIENT_PATH or `fbclient_path` to enable \
-                         runtime key forwarding",
-                    );
-                }
-            }
-        }
 
         // Two attachments per session: one for the user's statements,
         // one read-only for Plamenix's own metadata reads. Opening both
         // up front keeps the read path available even while the work
         // attachment sits inside a long manual transaction.
-        let (conn, meta, engine_major) = {
+        //
+        // Staging the encryption key and consuming it happen together
+        // inside this one blocking task, under one lock. The key slot is
+        // process-global because the engine's crypt callback is — one
+        // callback per process, reading one slot — so a second encrypted
+        // connect could otherwise overwrite the key between the first
+        // staging it and attaching with it, and the first database would
+        // be handed the wrong key.
+        let attached = {
             let config = config.clone();
             let mode = mode.clone();
             tokio::task::spawn_blocking(move || -> Result<_, DbError> {
-                let work = build_connection(
-                    &config,
-                    &mode,
-                    work_tx_config(TxConfig {
-                        isolation: TxIsolation::ReadCommitted,
-                        locking: TxLocking::NoWait,
-                    }),
-                )?;
-                let mut meta = build_connection(&config, &mode, meta_tx_config())?;
-                // Probed on the metadata attachment, before any user
-                // statement can be in flight.
-                let engine_major = probe_engine_major(&mut meta);
-                Ok((work, meta, engine_major))
+                #[cfg(feature = "native")]
+                let _gate = crate::crypt_callback::ATTACH_GATE
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+                // Wire the user-supplied key into fbclient's runtime
+                // callback before the attach handshake fires. Native
+                // mode only — the pure-Rust backend never loads
+                // fbclient. rsfbclient 0.26 does not expose
+                // `fb_database_crypt_callback`, so the bridge in
+                // `crate::crypt_callback` dlopens the same library
+                // rsfbclient uses and registers a Rust callback that
+                // reads from the process-global slot.
+                #[cfg(feature = "native")]
+                if matches!(mode, ConnectMode::Native)
+                    && let Some(key) = config.encryption_key.as_deref()
+                    && !key.is_empty()
+                {
+                    match crate::rsfb::resolver::resolve_fbclient_path(&config) {
+                        Some(path) => {
+                            if let Err(err) = crate::crypt_callback::register_with(&path) {
+                                tracing::warn!(
+                                    ?err,
+                                    "could not register fbclient crypt callback; \
+                                     database attach will rely on KeyHolder plugins instead",
+                                );
+                            } else {
+                                crate::crypt_callback::set_key(key.as_bytes());
+                            }
+                        }
+                        None => {
+                            tracing::warn!(
+                                "encryption_key supplied but no fbclient path resolved; \
+                                 set PLAMENIX_FBCLIENT_PATH or `fbclient_path` to enable \
+                                 runtime key forwarding",
+                            );
+                        }
+                    }
+                }
+
+                // Wiped whichever way the handshake went. The clear used
+                // to sit after the `?` that unwraps the attach, so the
+                // comment claimed "success or failure" and the code only
+                // did it on success — a wrong password, an unreachable
+                // host, a refused encrypted database all returned early
+                // and left the key in a process-global slot for the rest
+                // of the run.
+                let outcome = (|| -> Result<_, DbError> {
+                    let work = build_connection(
+                        &config,
+                        &mode,
+                        work_tx_config(TxConfig {
+                            isolation: TxIsolation::ReadCommitted,
+                            locking: TxLocking::NoWait,
+                        }),
+                    )?;
+                    let mut meta = build_connection(&config, &mode, meta_tx_config())?;
+                    // Probed on the metadata attachment, before any user
+                    // statement can be in flight.
+                    let engine_major = probe_engine_major(&mut meta);
+                    Ok((work, meta, engine_major))
+                })();
+
+                #[cfg(feature = "native")]
+                crate::crypt_callback::clear_key();
+
+                outcome
             })
-            .await??
+            .await?
         };
 
-        // Best-effort wipe of the process-global key slot once the
-        // attach handshake completes (success or failure). Leaves
-        // memory pressure lower than holding the key for the
-        // remainder of the process lifetime.
-        #[cfg(feature = "native")]
-        crate::crypt_callback::clear_key();
+        let (conn, meta, engine_major) = attached?;
 
         let id = SessionId::new();
         let state = Session {

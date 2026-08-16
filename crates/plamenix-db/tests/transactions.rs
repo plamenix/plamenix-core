@@ -9,6 +9,16 @@
 //! cd plamenix/dev/firebird5 && docker compose up -d
 //! cargo test -p plamenix-db --test transactions -- --ignored
 //! ```
+//!
+//! **One live suite at a time.** These do DDL, Firebird serialises DDL
+//! per database, and cargo runs test binaries in parallel — so
+//! `cargo test -p plamenix-db -- --ignored` puts several suites in
+//! contention for the same metadata lock and one of them loses. Named
+//! here because the symptom is misleading: the loser fails on a row
+//! count several lines after the DDL that actually failed.
+//!
+//! Both engines pass. For 2.5: `PLAMENIX_TEST_PORT=3051
+//! PLAMENIX_TEST_DB=/firebird/data/test.fdb`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -73,10 +83,36 @@ async fn count(driver: &RsfbDriver, session: SessionId, table: &str) -> i64 {
 
 /// Creates a scratch table, committed, so each test starts from a known
 /// state without depending on the shared seed schema.
+/// Gives a test an empty table of its own.
+///
+/// The result is checked rather than discarded, and that matters more
+/// than it looks. `RECREATE TABLE` is DDL, and Firebird serialises DDL
+/// per database — so when cargo runs these test binaries in parallel
+/// against the one container, a recreate can lose the metadata lock to
+/// a concurrent suite. Swallowing that left the *previous* run's table
+/// in place, rows and all, and the test then failed several lines later
+/// on a row count that was off by whatever the last run inserted. The
+/// symptom pointed at transaction semantics; the cause was a discarded
+/// `Result`.
+///
+/// Retried because the contention is transient, and asserted because a
+/// recreate that genuinely cannot happen should say so here rather than
+/// as a mystery downstream.
 async fn scratch_table(driver: &RsfbDriver, session: SessionId, name: &str) {
-    let _ = driver
-        .execute(session, format!("RECREATE TABLE {name} (ID INTEGER)"))
-        .await;
+    let sql = format!("RECREATE TABLE {name} (ID INTEGER)");
+    let mut last = String::new();
+    for attempt in 0..10 {
+        match driver.execute(session, sql.clone()).await {
+            Ok(_) => return,
+            Err(err) => {
+                last = err.to_string();
+                // Back off a little; the holder is another test binary
+                // finishing its own DDL, not a human.
+                tokio::time::sleep(std::time::Duration::from_millis(50 * (attempt + 1))).await;
+            }
+        }
+    }
+    panic!("could not create scratch table {name}: {last}");
 }
 
 #[tokio::test]

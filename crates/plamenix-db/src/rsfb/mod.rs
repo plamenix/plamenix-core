@@ -956,7 +956,8 @@ fn run_describe_schema(conn: &mut SimpleConnection) -> Result<Schema, DbError> {
              TRIM(rf.RDB$FIELD_NAME), rf.RDB$FIELD_POSITION, rf.RDB$NULL_FLAG, \
              f.RDB$FIELD_TYPE, f.RDB$FIELD_SUB_TYPE, f.RDB$FIELD_LENGTH, \
              COALESCE(f.RDB$DIMENSIONS, 0), \
-             CAST(COALESCE(rf.RDB$DEFAULT_SOURCE, f.RDB$DEFAULT_SOURCE) AS VARCHAR(4000)) \
+             CAST(COALESCE(rf.RDB$DEFAULT_SOURCE, f.RDB$DEFAULT_SOURCE) AS VARCHAR(4000)), \
+             f.RDB$FIELD_PRECISION, COALESCE(f.RDB$FIELD_SCALE, 0), f.RDB$CHARACTER_LENGTH \
              FROM RDB$RELATIONS r \
              LEFT JOIN RDB$RELATION_FIELDS rf ON rf.RDB$RELATION_NAME = r.RDB$RELATION_NAME \
              LEFT JOIN RDB$FIELDS f ON f.RDB$FIELD_NAME = rf.RDB$FIELD_SOURCE \
@@ -1028,10 +1029,30 @@ fn run_describe_schema(conn: &mut SimpleConnection) -> Result<Schema, DbError> {
             Some(SqlType::Text(value)) => Some(strip_default_prefix(value)),
             _ => None,
         };
+        let precision = match row.cols.get(10).map(|c| &c.value) {
+            Some(SqlType::Integer(value)) => Some(*value),
+            _ => None,
+        };
+        let scale = match row.cols.get(11).map(|c| &c.value) {
+            Some(SqlType::Integer(value)) => *value,
+            _ => 0,
+        };
+        let char_length = match row.cols.get(12).map(|c| &c.value) {
+            Some(SqlType::Integer(value)) => Some(*value),
+            _ => None,
+        };
 
         if let (Some(name), Some(pos), Some(ft)) = (col_name, position, field_type) {
             let nullable = null_flag.unwrap_or(0) == 0;
-            let sql_type = field_type_name(ft, field_sub_type, field_length, dimensions);
+            let sql_type = field_type_name(
+                ft,
+                field_sub_type,
+                field_length,
+                dimensions,
+                precision,
+                scale,
+                char_length,
+            );
             current.columns.push(ColumnInfo {
                 name,
                 position: pos,
@@ -1184,7 +1205,8 @@ fn run_describe_domains(conn: &mut SimpleConnection) -> Result<Vec<DomainInfo>, 
         .query(
             "SELECT TRIM(f.RDB$FIELD_NAME), \
              f.RDB$FIELD_TYPE, f.RDB$FIELD_SUB_TYPE, f.RDB$FIELD_LENGTH, \
-             COALESCE(f.RDB$NULL_FLAG, 0), COALESCE(f.RDB$DIMENSIONS, 0) \
+             COALESCE(f.RDB$NULL_FLAG, 0), COALESCE(f.RDB$DIMENSIONS, 0), \
+             f.RDB$FIELD_PRECISION, COALESCE(f.RDB$FIELD_SCALE, 0), f.RDB$CHARACTER_LENGTH \
              FROM RDB$FIELDS f \
              WHERE COALESCE(f.RDB$SYSTEM_FLAG, 0) = 0 \
              AND f.RDB$FIELD_NAME NOT STARTING WITH 'RDB$' \
@@ -1220,9 +1242,29 @@ fn run_describe_domains(conn: &mut SimpleConnection) -> Result<Vec<DomainInfo>, 
             Some(SqlType::Integer(v)) => *v,
             _ => 0,
         };
+        let precision = match row.cols.get(6).map(|c| &c.value) {
+            Some(SqlType::Integer(v)) => Some(*v),
+            _ => None,
+        };
+        let scale = match row.cols.get(7).map(|c| &c.value) {
+            Some(SqlType::Integer(v)) => *v,
+            _ => 0,
+        };
+        let char_length = match row.cols.get(8).map(|c| &c.value) {
+            Some(SqlType::Integer(v)) => Some(*v),
+            _ => None,
+        };
         out.push(DomainInfo {
             name,
-            sql_type: field_type_name(field_type, sub_type, length, dimensions),
+            sql_type: field_type_name(
+                field_type,
+                sub_type,
+                length,
+                dimensions,
+                precision,
+                scale,
+                char_length,
+            ),
             nullable: null_flag == 0,
         });
     }
@@ -1245,21 +1287,59 @@ fn strip_default_prefix(raw: &str) -> String {
     trimmed.to_string()
 }
 
-fn field_type_name(field_type: i64, sub_type: i64, length: i64, dimensions: i64) -> String {
+/// Renders a column's declared SQL type.
+///
+/// `char_length` is characters and `length` is bytes. They differ by the
+/// charset's bytes-per-character, so in a UTF8 database a `VARCHAR(100)`
+/// has `RDB$FIELD_LENGTH = 400`. This used to render the byte count,
+/// which meant a DDL export declared a column four times its real width
+/// and the inline editor let the user type past what the column holds.
+/// `RDB$CHARACTER_LENGTH` is NULL for non-text types and on some older
+/// domains, so the byte length stays as the fallback.
+///
+/// `precision` and `scale` carry NUMERIC and DECIMAL. Rendering them
+/// bare lost both: Firebird reads an undecorated `NUMERIC` as
+/// `NUMERIC(9,0)`, so exporting and re-running the DDL for a
+/// `NUMERIC(18,4)` money column silently changed its type and truncated
+/// every value in it. Scale is stored negative — `-4` means four
+/// decimal places.
+fn field_type_name(
+    field_type: i64,
+    sub_type: i64,
+    length: i64,
+    dimensions: i64,
+    precision: Option<i64>,
+    scale: i64,
+    char_length: Option<i64>,
+) -> String {
+    // Firebird stores NUMERIC/DECIMAL as a scaled integer, so the
+    // precision it reports can be 0 for a domain that never declared
+    // one. Falling back to what the storage type can hold keeps the
+    // rendered DDL runnable.
+    let exact = |default_precision: i64| -> String {
+        let p = precision.filter(|p| *p > 0).unwrap_or(default_precision);
+        format!("({p},{})", -scale)
+    };
+    let text_length = char_length.filter(|n| *n > 0).unwrap_or(length);
+
     let base: String = match field_type {
-        7 => "SMALLINT".into(),
+        7 => match sub_type {
+            1 => format!("NUMERIC{}", exact(4)),
+            2 => format!("DECIMAL{}", exact(4)),
+            _ => "SMALLINT".into(),
+        },
         8 => match sub_type {
-            1 => "NUMERIC".into(),
-            2 => "DECIMAL".into(),
+            1 => format!("NUMERIC{}", exact(9)),
+            2 => format!("DECIMAL{}", exact(9)),
             _ => "INTEGER".into(),
         },
         10 => "FLOAT".into(),
         12 => "DATE".into(),
         13 => "TIME".into(),
-        14 => format!("CHAR({length})"),
+        14 => format!("CHAR({text_length})"),
         16 => match sub_type {
-            1 => "NUMERIC".into(),
-            2 => "DECIMAL".into(),
+            1 => format!("NUMERIC{}", exact(18)),
+            2 => format!("DECIMAL{}", exact(18)),
             _ => "BIGINT".into(),
         },
         23 => "BOOLEAN".into(),
@@ -1270,7 +1350,7 @@ fn field_type_name(field_type: i64, sub_type: i64, length: i64, dimensions: i64)
         28 => "TIME WITH TIME ZONE".into(),
         29 => "TIMESTAMP WITH TIME ZONE".into(),
         35 => "TIMESTAMP".into(),
-        37 => format!("VARCHAR({length})"),
+        37 => format!("VARCHAR({text_length})"),
         261 => match sub_type {
             1 => "BLOB SUB_TYPE TEXT".into(),
             _ => "BLOB".into(),

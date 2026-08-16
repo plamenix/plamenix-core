@@ -223,17 +223,34 @@ impl JsonSecretStore {
         let bytes = serde_json::to_vec_pretty(&list)
             .map_err(|err| SecretError::Backend(format!("failed to serialise secrets: {err}")))?;
         let tmp = self.path.with_extension("json.tmp");
-        fs::write(&tmp, &bytes).map_err(|err| {
+        // Created 0600 rather than written and then chmod'd. The old
+        // order left the secrets world-readable for the window between
+        // the two calls — short, but a local reader only has to poll —
+        // and it discarded the `set_permissions` result, so a failure
+        // left the file at whatever the umask gave and said nothing.
+        // The doc comment on this type promises 0600; this is what
+        // makes it true.
+        #[cfg(unix)]
+        let write_result = {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)
+                .and_then(|mut file| file.write_all(&bytes))
+        };
+        #[cfg(not(unix))]
+        let write_result = fs::write(&tmp, &bytes);
+
+        write_result.map_err(|err| {
             SecretError::Backend(format!(
                 "failed to write secrets temp file {}: {err}",
                 tmp.display()
             ))
         })?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
-        }
         fs::rename(&tmp, &self.path).map_err(|err| {
             SecretError::Backend(format!(
                 "failed to rename secrets temp file into place: {err}"

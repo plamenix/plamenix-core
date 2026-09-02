@@ -14,6 +14,10 @@ authors = ["Plamenix Contributors"]
 # here is a deliberate act: each entry costs review time, supply-chain trust,
 # and compile time. Add only when concretely needed; remove when no longer used.
 uuid = { version = "1", features = ["v4", "serde"] }
+# URL parsing for the plugin host's outbound-network allow-list. Hand-rolled
+# host extraction is where SSRF bugs live; this is the one place a mistake
+# would let a plugin reach a host the user never approved.
+url = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -28,6 +32,12 @@ opentelemetry_sdk = { version = "0.31", default-features = false, features = ["t
 opentelemetry-otlp = { version = "0.31", default-features = false, features = ["trace", "grpc-tonic"] }
 toml = "0.9"
 semver = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+clap = { version = "4", features = ["derive"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+sha2 = "0.10"
+hex = "0.4"
+rand = "0.8"
 wasmtime = { version = "27", default-features = false, features = ["runtime", "cranelift", "component-model", "async"] }
 wasmtime-wasi = { version = "27" }
 keyring = { version = "3", default-features = false }
@@ -77,3 +87,9 @@ opt-level = 1
 # `isc_array_lookup_bounds` + `isc_array_get_slice` on top of the
 # upstream 0.26 release. See `vendor/rsfbclient-native/src/row.rs`.
 rsfbclient-native = { path = "vendor/rsfbclient-native" }
+# Vendored copy that stops coercing NUMERIC/DECIMAL columns to f64.
+# Upstream describes scaled integers as SQL_DOUBLE, which loses the
+# exact value inside the driver before any caller sees it. See
+# `vendor/rsfbclient-rust/src/xsqlda.rs` and the upstream report drafted
+# at `docs/upstream-rsfbclient-numeric.md` in the plamenix meta repo.
+rsfbclient-rust = { path = "vendor/rsfbclient-rust" }

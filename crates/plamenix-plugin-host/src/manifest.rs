@@ -12,10 +12,76 @@ use std::path::PathBuf;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 
-use crate::capability::{Permission, PermissionSet};
+use crate::capability::{Permission, PermissionGrant, PermissionSet};
 use crate::error::PluginError;
 
-const RUNTIME_SUBPROCESS_CAPABILITY: Permission = Permission::RuntimeSubprocess;
+const DEFAULT_WORLD: &str = "plamenix:plugin@1.0.0/plugin-minimal";
+
+/// Plamenix edition a plugin can target.
+///
+/// Manifests declare a `targets` list; the host filters plugins whose
+/// declared targets exclude the current edition at install time. Pure
+/// WASM plugins using only universal capabilities should target both;
+/// plugins reaching for the OS keyring should
+/// declare desktop-only.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Edition {
+    /// Tauri 2 desktop edition.
+    Desktop,
+    /// Fastify + React web edition.
+    Web,
+}
+
+impl Edition {
+    fn from_token(token: &str) -> Result<Self, PluginError> {
+        match token {
+            "desktop" => Ok(Self::Desktop),
+            "web" => Ok(Self::Web),
+            other => Err(PluginError::InvalidManifest(format!(
+                "unknown target edition `{other}` (valid: \"desktop\", \"web\")"
+            ))),
+        }
+    }
+
+    /// Canonical string form used in manifests and CLI output.
+    #[must_use]
+    pub const fn as_token(self) -> &'static str {
+        match self {
+            Self::Desktop => "desktop",
+            Self::Web => "web",
+        }
+    }
+}
+
+/// Supervisor restart policy. Mirrors OTP semantics (per
+/// `PLUGIN_ARCHITECTURE.md` §12).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum RestartPolicy {
+    /// Always restart on any exit. Reserve for first-party essential
+    /// plugins; the crash budget still applies.
+    Permanent,
+    /// Restart on abnormal exits only (trap, fuel exhaustion, etc.).
+    /// Default for community plugins.
+    #[default]
+    Transient,
+    /// Never restart. Use for one-shot tools and batch imports.
+    Temporary,
+}
+
+impl RestartPolicy {
+    fn from_token(token: &str) -> Result<Self, PluginError> {
+        match token {
+            "permanent" => Ok(Self::Permanent),
+            "transient" => Ok(Self::Transient),
+            "temporary" => Ok(Self::Temporary),
+            other => Err(PluginError::InvalidManifest(format!(
+                "unknown restart_policy `{other}` (valid: \"permanent\", \"transient\", \"temporary\")"
+            ))),
+        }
+    }
+}
 
 /// A parsed and validated plugin manifest.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -26,7 +92,7 @@ pub struct Manifest {
     pub permissions: PermissionSet,
     /// File paths within the bundle for wasm and UI halves.
     pub entry_points: EntryPoints,
-    /// Runtime-mode flags (subprocess, sandbox opt-outs).
+    /// `[runtime]` flags — currently the optional resource limits.
     pub runtime: RuntimeFlags,
     /// Declarative UI contributions advertised by the plugin. Optional —
     /// plugins that only do background work leave this empty.
@@ -38,10 +104,69 @@ pub struct Manifest {
 /// manifest entries so the host can render them without running the
 /// plugin first; the plugin's runtime half augments them with state.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+/// Unknown keys are refused rather than ignored.
+///
+/// `plugin-manifest.md` promised this and the code did not do it, which
+/// is the worse half of the two possible mistakes: a plugin author
+/// writing a contribution block from an outdated document got a
+/// manifest that parsed cleanly and a plugin that contributed nothing,
+/// with no error anywhere to say why. `[contributions.ui]` and
+/// `[contributions.db]` were both documented and neither has ever
+/// existed.
+#[serde(deny_unknown_fields)]
 pub struct Contributions {
     /// Side-panel contributions surfaced by the host's sidebar shell.
     #[serde(default)]
     pub sidebar_panels: Vec<SidebarPanel>,
+    /// Event topics the plugin wants to receive (I6.2). Each entry is
+    /// a topic pattern in the grammar documented at
+    /// [`crate::event_bus`]: slash-separated namespace with `*`
+    /// (single-segment wildcard) or `**` (zero-or-more trailing
+    /// segments). The host validates patterns at manifest parse +
+    /// registers each via `EventBus::subscribe(plugin_id, pattern)` at
+    /// activation; subscriptions are dropped via
+    /// `unsubscribe_by_plugin` at deactivation (or supervisor
+    /// teardown). When the host dispatches a matching event it calls
+    /// the plugin's exported `handle-event(topic, payload)` on each
+    /// matched subscription.
+    #[serde(default)]
+    pub event_subscriptions: Vec<String>,
+    /// Extension points the plugin wants to be consulted on before the
+    /// operation commits. Unlike an event subscription, an entry here
+    /// lets the plugin refuse or rewrite what the user asked for, so
+    /// each one is validated against the closed set of points, against
+    /// the priority band reserved for plugins, and against the
+    /// capability the point requires — see
+    /// [`crate::interceptor::ExtensionPoint`].
+    #[serde(default)]
+    pub interceptors: Vec<InterceptorContribution>,
+}
+
+/// One `[[contributions.interceptors]]` entry.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InterceptorContribution {
+    /// Which point, as a wire name (`query.executing`, …).
+    pub extension_point: String,
+    /// Resolved form of [`extension_point`](Self::extension_point).
+    /// Populated at parse time so nothing downstream re-parses it.
+    #[serde(skip_deserializing, default = "default_extension_point")]
+    pub point: crate::interceptor::ExtensionPoint,
+    /// Lower runs earlier. Defaults to
+    /// [`MIN_PLUGIN_PRIORITY`](crate::interceptor::MIN_PLUGIN_PRIORITY).
+    #[serde(default = "default_interceptor_priority")]
+    pub priority: u16,
+    /// Author's rationale, shown in the install dialog and permissions
+    /// panel. Optional, like a permission's purpose.
+    #[serde(default)]
+    pub purpose: Option<String>,
+}
+
+const fn default_interceptor_priority() -> u16 {
+    crate::interceptor::MIN_PLUGIN_PRIORITY
+}
+
+const fn default_extension_point() -> crate::interceptor::ExtensionPoint {
+    crate::interceptor::ExtensionPoint::QueryExecuting
 }
 
 /// One sidebar-panel contribution.
@@ -57,6 +182,66 @@ pub struct SidebarPanel {
     pub icon: Option<String>,
 }
 
+/// Enforces the priority band and the capability gate for one
+/// interceptor contribution.
+///
+/// The capability gate is the load-bearing half. An interceptor sees
+/// the context of the operation it intercepts, so registering for
+/// `cell.committing` without holding a write capability would be a way
+/// to read every value the user edits while asking for nothing — the
+/// permissions dialog would show an empty list. Requiring the
+/// capability the point's context exposes keeps what the plugin can
+/// observe in step with what the user approved.
+///
+/// Mapping is from the table in `docs/plugin-interceptors.md`.
+fn validate_interceptor(
+    entry: &InterceptorContribution,
+    permissions: &PermissionSet,
+) -> Result<(), PluginError> {
+    use crate::interceptor::{MAX_PRIORITY, MIN_PLUGIN_PRIORITY};
+
+    if entry.priority < MIN_PLUGIN_PRIORITY || entry.priority > MAX_PRIORITY {
+        return Err(PluginError::InvalidManifest(format!(
+            "contributions.interceptors priority {} for `{}` is outside {MIN_PLUGIN_PRIORITY}..={MAX_PRIORITY}; below {MIN_PLUGIN_PRIORITY} is reserved for the host's own interceptors, which plugins must not preempt",
+            entry.priority, entry.extension_point,
+        )));
+    }
+
+    // `editor.saving` is deliberately absent: the editor buffer is a
+    // plugin-shared surface and holds no database content, so gating it
+    // would be ceremony rather than protection.
+    let accepted: &[Permission] = match entry.point {
+        crate::interceptor::ExtensionPoint::EditorSaving => return Ok(()),
+        // Read is enough for these three: seeing a statement, an export
+        // request, or a connection config does not imply changing one.
+        crate::interceptor::ExtensionPoint::QueryExecuting
+        | crate::interceptor::ExtensionPoint::ExportStarting
+        | crate::interceptor::ExtensionPoint::ConnectionOpening => {
+            &[Permission::DbReadAny, Permission::DbWriteAny]
+        }
+        // These four sit in front of a write, so read access is not
+        // enough to be consulted about them.
+        crate::interceptor::ExtensionPoint::CellCommitting
+        | crate::interceptor::ExtensionPoint::RowInserting
+        | crate::interceptor::ExtensionPoint::RowDeleting
+        | crate::interceptor::ExtensionPoint::SchemaActionApplying => {
+            &[Permission::DbWriteAny, Permission::DbDdlAny]
+        }
+    };
+
+    if accepted
+        .iter()
+        .any(|permission| permissions.declares(permission))
+    {
+        return Ok(());
+    }
+
+    Err(PluginError::InvalidManifest(format!(
+        "contributions.interceptors entry `{}` requires one of {accepted:?} in [permissions]; an interceptor sees the context of every operation it intercepts, so it must ask for the capability that context exposes",
+        entry.extension_point,
+    )))
+}
+
 /// `[plugin]` table — identity and host-compatibility metadata.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PluginMetadata {
@@ -70,6 +255,27 @@ pub struct PluginMetadata {
     pub plamenix_min_version: VersionReq,
     /// `WIT` package version the plugin targets (e.g. "1.0").
     pub plugin_api: String,
+    /// Fully qualified WIT world identifier the plugin targets, in the
+    /// form `<package>:<name>@<version>/<world>` — for example
+    /// `plamenix:plugin@1.0.0/plugin-minimal`. The host links only the
+    /// imports this world exposes; capabilities outside the world's
+    /// surface are unreachable even if granted. Defaults to
+    /// `plamenix:plugin@1.0.0/plugin-minimal`.
+    pub world: String,
+    /// The capability tier [`world`](Self::world) resolved to.
+    ///
+    /// Kept alongside the raw string rather than replacing it: the
+    /// string is what the author wrote and what round-trips back out,
+    /// while this is what the host enforces against. Resolved once at
+    /// parse time so no later code has to re-parse and possibly
+    /// disagree.
+    pub world_tier: crate::world::PluginWorld,
+    /// Editions the plugin runs on. Host refuses to install when the
+    /// list excludes the current edition. Defaults to `[Desktop, Web]`.
+    pub targets: Vec<Edition>,
+    /// Supervisor restart policy. Defaults to `Transient` — restart on
+    /// abnormal exits, leave normal shutdowns alone.
+    pub restart_policy: RestartPolicy,
     /// Optional author line (`Name <email>`).
     pub author: Option<String>,
     /// Optional `SPDX` licence string.
@@ -78,6 +284,16 @@ pub struct PluginMetadata {
     pub homepage: Option<String>,
     /// Optional short description.
     pub description: Option<String>,
+}
+
+impl PluginMetadata {
+    /// Returns `true` when the plugin's `targets` list includes the
+    /// supplied edition. Used at install time to refuse plugins that
+    /// declare a target this host does not satisfy.
+    #[must_use]
+    pub fn supports_edition(&self, edition: Edition) -> bool {
+        self.targets.contains(&edition)
+    }
 }
 
 /// `[entry_points]` table — bundle-relative paths to plugin halves.
@@ -89,18 +305,65 @@ pub struct EntryPoints {
     /// Path to the ESM module exporting React contributions. Optional;
     /// some plugins ship only a backend half.
     pub ui: Option<PathBuf>,
-    /// Path to a native executable for plugins that opt out of the
-    /// WASM sandbox via `runtime.requires_subprocess`. Required when
-    /// that flag is set, ignored otherwise.
-    pub subprocess: Option<PathBuf>,
 }
 
 /// `[runtime]` table — flags that change how the host loads the plugin.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RuntimeFlags {
-    /// When `true`, the plugin must run in a subprocess (out of the
-    /// WASM sandbox). Requires `runtime.subprocess` capability.
-    pub requires_subprocess: bool,
+    /// I8.6 — optional `[runtime.limits]` table. Override per-store
+    /// wasmtime caps (memory in MiB, table/instance counts). Missing
+    /// fields leave the default in place. Hosts MAY refuse to grant
+    /// requested overrides through the Permissions panel.
+    #[serde(default)]
+    pub limits: RuntimeLimits,
+}
+
+/// `[runtime.limits]` table — declarative per-store resource caps.
+/// Missing fields fall back to the I8.6 defaults from
+/// [`crate::limits`].
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+pub struct RuntimeLimits {
+    /// Linear memory cap in MiB. `None` keeps the 64 MiB default.
+    #[serde(default)]
+    pub max_memory_mib: Option<usize>,
+    /// Per-table element cap. `None` keeps the 10 000 default.
+    #[serde(default)]
+    pub max_table_elements: Option<usize>,
+    /// Component instance cap. `None` keeps the 64 default.
+    #[serde(default)]
+    pub max_instances: Option<usize>,
+    /// Table count cap. `None` keeps the 16 default.
+    #[serde(default)]
+    pub max_tables: Option<usize>,
+    /// Memory count cap. `None` keeps the 4 default.
+    #[serde(default)]
+    pub max_memories: Option<usize>,
+    /// I8.8 — concurrent in-flight call cap per plugin. `None`
+    /// keeps the 4 default from
+    /// [`crate::concurrency::MAX_IN_FLIGHT_DEFAULT`].
+    #[serde(default)]
+    pub max_in_flight: Option<usize>,
+}
+
+impl RuntimeLimits {
+    /// Converts the manifest table into a
+    /// [`crate::limits::ResourceLimitsOverride`].
+    #[must_use]
+    pub fn as_override(&self) -> crate::limits::ResourceLimitsOverride {
+        crate::limits::ResourceLimitsOverride {
+            max_memory_mib: self.max_memory_mib,
+            max_table_elements: self.max_table_elements,
+            max_instances: self.max_instances,
+            max_tables: self.max_tables,
+            max_memories: self.max_memories,
+        }
+    }
+
+    /// Resolves the manifest override against the I8.6 defaults.
+    #[must_use]
+    pub fn resolve(&self) -> crate::limits::ResourceLimits {
+        crate::limits::ResourceLimits::from_manifest_override(&self.as_override())
+    }
 }
 
 impl Manifest {
@@ -146,6 +409,12 @@ struct RawPlugin {
     version: String,
     plamenix_min_version: String,
     plugin_api: String,
+    #[serde(default)]
+    world: Option<String>,
+    #[serde(default)]
+    targets: Option<Vec<String>>,
+    #[serde(default)]
+    restart_policy: Option<String>,
     author: Option<String>,
     license: Option<String>,
     homepage: Option<String>,
@@ -155,34 +424,83 @@ struct RawPlugin {
 #[derive(Debug, Default, Deserialize)]
 struct RawPermissions {
     #[serde(default)]
-    required: Vec<String>,
+    required: Vec<RawPermissionGrant>,
     #[serde(default)]
-    optional: Vec<String>,
+    optional: Vec<RawPermissionGrant>,
+}
+
+/// Untagged serde wrapper that accepts either a bare capability
+/// string OR an object with `capability` + `purpose`. Untagged so
+/// both forms can sit in the same list, e.g. one legacy plain-string
+/// entry alongside an object entry carrying a purpose.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawPermissionGrant {
+    Plain(String),
+    Detailed {
+        capability: String,
+        #[serde(default)]
+        purpose: Option<String>,
+    },
+}
+
+impl RawPermissionGrant {
+    fn into_grant(self) -> Result<PermissionGrant, PluginError> {
+        match self {
+            Self::Plain(raw) => Ok(PermissionGrant::new(Permission::parse(&raw)?)),
+            Self::Detailed {
+                capability,
+                purpose,
+            } => {
+                let cap = Permission::parse(&capability)?;
+                Ok(match purpose {
+                    Some(p) if !p.is_empty() => PermissionGrant::with_purpose(cap, p),
+                    _ => PermissionGrant::new(cap),
+                })
+            }
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
 struct RawEntryPoints {
     wasm: Option<PathBuf>,
     ui: Option<PathBuf>,
-    subprocess: Option<PathBuf>,
 }
 
 impl TryFrom<RawManifest> for Manifest {
     type Error = PluginError;
 
     fn try_from(raw: RawManifest) -> Result<Self, Self::Error> {
-        if raw.entry_points.wasm.is_none()
-            && raw.entry_points.ui.is_none()
-            && raw.entry_points.subprocess.is_none()
-        {
+        if raw.entry_points.wasm.is_none() && raw.entry_points.ui.is_none() {
             return Err(PluginError::InvalidManifest(
-                "entry_points must define at least one of `wasm`, `ui`, or `subprocess`".into(),
+                "entry_points must define at least one of `wasm` or `ui`".into(),
             ));
         }
 
-        if raw.runtime.requires_subprocess && raw.entry_points.subprocess.is_none() {
-            return Err(PluginError::MissingSubprocessEntry);
-        }
+        let world = raw
+            .plugin
+            .world
+            .unwrap_or_else(|| DEFAULT_WORLD.to_string());
+        let world_tier = crate::world::parse_world_identifier(&world)?;
+
+        let targets = match raw.plugin.targets {
+            Some(tokens) if tokens.is_empty() => {
+                return Err(PluginError::InvalidManifest(
+                    "plugin.targets must list at least one edition".into(),
+                ));
+            }
+            Some(tokens) => tokens
+                .into_iter()
+                .map(|t| Edition::from_token(&t))
+                .collect::<Result<Vec<_>, _>>()?,
+            None => vec![Edition::Desktop, Edition::Web],
+        };
+
+        let restart_policy = match raw.plugin.restart_policy.as_deref() {
+            Some(token) => RestartPolicy::from_token(token)?,
+            None => RestartPolicy::default(),
+        };
 
         let plugin = PluginMetadata {
             id: raw.plugin.id,
@@ -198,6 +516,10 @@ impl TryFrom<RawManifest> for Manifest {
                 .parse()
                 .map_err(|err: semver::Error| PluginError::InvalidManifest(err.to_string()))?,
             plugin_api: raw.plugin.plugin_api,
+            world,
+            world_tier,
+            targets,
+            restart_policy,
             author: raw.plugin.author,
             license: raw.plugin.license,
             homepage: raw.plugin.homepage,
@@ -208,20 +530,42 @@ impl TryFrom<RawManifest> for Manifest {
             .permissions
             .required
             .into_iter()
-            .map(|raw| Permission::parse(&raw))
+            .map(RawPermissionGrant::into_grant)
             .collect::<Result<Vec<_>, _>>()?;
         let optional = raw
             .permissions
             .optional
             .into_iter()
-            .map(|raw| Permission::parse(&raw))
+            .map(RawPermissionGrant::into_grant)
             .collect::<Result<Vec<_>, _>>()?;
 
         let permissions = PermissionSet { required, optional };
 
-        if raw.runtime.requires_subprocess && !permissions.grants(&RUNTIME_SUBPROCESS_CAPABILITY) {
-            return Err(PluginError::MissingSubprocessCapability);
-        }
+        // The WIT header promises a plugin only sees the imports its
+        // declared world exposes. Granting a capability the world has
+        // no import for is not a smaller grant — it is a prompt the
+        // user is asked to approve for nothing.
+        crate::world::check_permissions(world_tier, &permissions)?;
+        crate::world::check_targets(world_tier, &plugin.targets)?;
+
+        let contributions = {
+            // Validate event-subscription patterns at parse time
+            // (I6.2) — fail-loud beats failing silently at activation
+            // when EventBus::subscribe rejects.
+            for pattern in &raw.contributions.event_subscriptions {
+                crate::event_bus::tokenise_pattern(pattern).map_err(|err| {
+                    PluginError::InvalidManifest(format!(
+                        "contributions.event_subscriptions entry `{pattern}` invalid: {err}"
+                    ))
+                })?;
+            }
+            let mut contributions = raw.contributions;
+            for entry in &mut contributions.interceptors {
+                entry.point = crate::interceptor::ExtensionPoint::parse(&entry.extension_point)?;
+                validate_interceptor(entry, &permissions)?;
+            }
+            contributions
+        };
 
         Ok(Self {
             plugin,
@@ -229,10 +573,9 @@ impl TryFrom<RawManifest> for Manifest {
             entry_points: EntryPoints {
                 wasm: raw.entry_points.wasm,
                 ui: raw.entry_points.ui,
-                subprocess: raw.entry_points.subprocess,
             },
             runtime: raw.runtime,
-            contributions: raw.contributions,
+            contributions,
         })
     }
 }

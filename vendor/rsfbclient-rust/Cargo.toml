@@ -1,0 +1,39 @@
+# Standalone workspace root: this crate is consumed through the
+# parent's [patch.crates-io], not as a workspace member, so cargo
+# would otherwise walk up and reject it. Declaring it here lets its
+# own unit tests run (`just test-vendor`).
+[workspace]
+
+[package]
+name = "rsfbclient-rust"
+version = "0.26.0"
+description = "A pure Rust implementation of firebird client lib"
+authors = ["Luis Fernando Batels <luisfbatels@gmail.com>", "Jairo H Wiethan <jairinhowiethan@gmail.com>"]
+edition = "2021"
+repository = "https://github.com/fernandobatels/rsfbclient"
+keywords = ["firebird", "fbclient", "database"]
+categories = ["database"]
+license = "MIT"
+
+[dependencies]
+bytes = "1.0.1"
+digest = "0.10.3"
+generic-array = "0.14.4"
+hex = "0.4.3"
+lazy_static = "1.4.0"
+num-bigint = "0.4.0"
+num_enum = "0.5.7"
+pwhash = "1.0.0"
+rand = "0.8.3"
+# Path dropped from the upstream manifest: the sibling crate is not
+# vendored, so this resolves from crates.io like the vendored
+# rsfbclient-native does.
+rsfbclient-core = { version = "0.26.0" }
+sha-1 = "0.10.0"
+sha2 = "0.10.2"
+
+[features]
+fuzz_testing = []
+
+[package.metadata.docs.rs]
+all-features = true

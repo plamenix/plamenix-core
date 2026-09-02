@@ -67,11 +67,7 @@ pub trait ProfileStore: Send + Sync {
     /// # Errors
     ///
     /// Returns the backing store's failure mode if the write fails.
-    fn touch_disconnected(
-        &self,
-        id: ProfileId,
-        at_epoch_ms: i64,
-    ) -> Result<(), ProfileError>;
+    fn touch_disconnected(&self, id: ProfileId, at_epoch_ms: i64) -> Result<(), ProfileError>;
 }
 
 /// JSON-on-disk implementation of [`ProfileStore`].
@@ -102,16 +98,18 @@ impl JsonFileStore {
     fn read_all(&self) -> Result<Vec<Profile>, ProfileError> {
         match std::fs::read(&self.path) {
             Ok(bytes) => {
-                let file: ProfilesFile = serde_json::from_slice(&bytes).map_err(|err| {
-                    ProfileError::InvalidFile {
+                let file: ProfilesFile =
+                    serde_json::from_slice(&bytes).map_err(|err| ProfileError::InvalidFile {
                         path: self.path.clone(),
                         message: err.to_string(),
-                    }
-                })?;
+                    })?;
                 Ok(file.profiles)
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(source) => Err(ProfileError::Io { path: self.path.clone(), source }),
+            Err(source) => Err(ProfileError::Io {
+                path: self.path.clone(),
+                source,
+            }),
         }
     }
 
@@ -186,11 +184,7 @@ impl ProfileStore for JsonFileStore {
         self.write_all(&profiles)
     }
 
-    fn touch_disconnected(
-        &self,
-        id: ProfileId,
-        at_epoch_ms: i64,
-    ) -> Result<(), ProfileError> {
+    fn touch_disconnected(&self, id: ProfileId, at_epoch_ms: i64) -> Result<(), ProfileError> {
         let mut profiles = self.read_all()?;
         let Some(target) = profiles.iter_mut().find(|p| p.id == id) else {
             return Ok(());

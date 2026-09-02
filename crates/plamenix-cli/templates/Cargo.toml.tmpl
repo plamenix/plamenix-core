@@ -1,0 +1,22 @@
+[package]
+name = "{{CRATE_NAME}}"
+version = "{{VERSION}}"
+edition = "2024"
+rust-version = "1.95"
+authors = []
+license = "MIT OR Apache-2.0"
+description = "Plamenix plugin"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Add `plamenix-plugin-sdk` once published; until then the WIT
+# bindings are wired via local path development.
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+opt-level = "z"

@@ -40,36 +40,34 @@ pub enum PluginError {
     #[error("wasm runtime error: {0}")]
     Runtime(String),
 
-    /// `runtime.requires_subprocess` was set but no
-    /// `entry_points.subprocess` path is present.
-    #[error("manifest sets runtime.requires_subprocess without entry_points.subprocess")]
-    MissingSubprocessEntry,
-
-    /// `runtime.requires_subprocess` was set but the plugin did not
-    /// list `runtime.subprocess` in its capability set.
-    #[error("subprocess activation requires the `runtime.subprocess` capability")]
-    MissingSubprocessCapability,
-
-    /// The declared subprocess binary is not present at the path.
-    #[error("subprocess binary missing at {0}")]
-    SubprocessMissing(PathBuf),
-
-    /// The subprocess could not be spawned, timed out, or exited with a
-    /// non-zero status before producing a valid activation result.
-    #[error("subprocess failed (exit {code:?}): {message}")]
-    SubprocessFailed {
-        /// Process exit code, when the process exited cleanly.
-        code: Option<i32>,
-        /// Human-readable cause.
-        message: String,
-    },
-
-    /// The subprocess exited successfully but its stdout did not match
-    /// the activation protocol.
-    #[error("subprocess protocol error: {0}")]
-    SubprocessProtocol(String),
+    /// The archive expands to more than the extraction limits allow.
+    ///
+    /// Compression ratios are unbounded, so a small `.plx` can declare
+    /// or decompress to far more than the disk can hold. Refused rather
+    /// than truncated: a partially extracted plugin is not a plugin.
+    #[error("archive too large: {0}")]
+    ArchiveTooLarge(String),
 
     /// IO error reading bundle files.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// Supervisor was asked about a plugin id that was never
+    /// registered (or has been forgotten).
+    #[error("plugin not registered with supervisor: {0}")]
+    PluginNotFound(String),
+
+    /// I7.15 — `.plx` archive signature is malformed (bad JSON,
+    /// missing fields, unsupported algorithm).
+    #[error("plugin signature malformed: {0}")]
+    SignatureMalformed(String),
+
+    /// I7.16 — `.plx` archive carries no `signature.json` member.
+    #[error("plugin archive is unsigned")]
+    SignatureMissing,
+
+    /// I7.16 — signature failed cryptographic verification (tampered
+    /// archive OR wrong public key).
+    #[error("plugin signature failed verification: {0}")]
+    SignatureInvalid(String),
 }

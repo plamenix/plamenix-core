@@ -1,0 +1,21 @@
+#:schema https://plamenix.dev/schemas/plugin-manifest-1.0.0.json
+
+[plugin]
+id = "dev.plamenix.json-cell-renderer"
+name = "JSON Cell Renderer"
+version = "1.0.0"
+plamenix_min_version = ">=1.0.0-beta"
+plugin_api = "1.0"
+world = "plamenix:plugin@1.0.0/plugin-minimal"
+targets = ["desktop", "web"]
+restart_policy = "transient"
+description = "Renders JSON-shaped VARCHAR cells as collapsible trees. Tri-state validator for the Plamenix plugin architecture — same .plx runs on desktop AND web editions."
+author = "Plamenix"
+license = "MIT OR Apache-2.0"
+
+[permissions]
+required = []
+optional = []
+
+[entry_points]
+ui = "ui.mjs"

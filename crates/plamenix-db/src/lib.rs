@@ -39,16 +39,18 @@ pub mod error;
 pub mod export;
 pub mod query;
 pub mod rsfb;
+pub mod transaction;
 
 pub use crypt::CryptState;
 pub use driver::{ConnectMode, DbDriver};
 pub use error::DbError;
 pub use query::{
-    BlobRef, Column, ColumnValue, QueryResult, Row, StatementOutcome, inject_row_limit,
-    is_select_like, split_statements,
+    BlobRef, Column, ColumnValue, QueryResult, Row, StatementOutcome, StatementShape,
+    accepts_row_limit, inject_row_limit, split_statements, statement_shape,
 };
 pub use rsfb::RsfbDriver;
 pub use rsfb::resolver::{FBCLIENT_PATH_ENV, resolve_fbclient_path};
+pub use transaction::{TxConfig, TxIsolation, TxLocking, TxMode, TxStatus};
 
 // Re-export for downstream crates that only depend on `plamenix-db`.
 pub use plamenix_types::{ColumnInfo, ConnectionConfig, Schema, SessionId, TableInfo, TableKind};

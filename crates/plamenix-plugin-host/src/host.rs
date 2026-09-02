@@ -5,6 +5,25 @@
 //! share across threads. Each loaded plugin gets its own
 //! [`wasmtime::Store`] when it is instantiated (Phase B); the engine
 //! itself stays stateless.
+//!
+//! # Panic discipline (I8.9)
+//!
+//! Same rule as [`crate::host_impl`]: this module sits at the
+//! wasmtime boundary and runs adjacent to plugin code. `unwrap`,
+//! `expect`, and `panic!` are denied outside of tests; surface
+//! failure modes through [`PluginError`].
+
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unimplemented,
+        clippy::todo,
+        clippy::unreachable
+    )
+)]
 
 use std::sync::Arc;
 
@@ -32,11 +51,14 @@ impl PluginHost {
         config.wasm_component_model(true);
         config.async_support(true);
         config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Enable);
-        // Plugins are user-supplied code; epoch interruption lets the
-        // host preempt long-running plugin work. The deadline is set
-        // per-store when a plugin call begins. Disabled in dev until a
-        // store-side deadline scheduler lands.
-        config.epoch_interruption(false);
+        // I8.7 — epoch interruption enabled. The host spawns an
+        // [`crate::epoch::EpochTicker`] that bumps the engine's
+        // counter every 10 ms; the activator + dispatchers call
+        // `Store::set_epoch_deadline` per call to preempt runaway
+        // plugins. Without the ticker, no preemption happens —
+        // hosts that omit the ticker get an effectively-unbounded
+        // deadline (defensive: better than crashing the host).
+        config.epoch_interruption(true);
 
         let engine = Engine::new(&config).map_err(|err| PluginError::Runtime(err.to_string()))?;
         Ok(Self {

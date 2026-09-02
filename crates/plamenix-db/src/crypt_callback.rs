@@ -61,6 +61,24 @@ pub fn set_key(bytes: &[u8]) {
     }
 }
 
+/// Serialises the window between staging a key and completing the
+/// attach that consumes it.
+///
+/// The key slot is process-global because the engine's crypt callback
+/// is: one callback per process, reading one slot. So two connects to
+/// two encrypted databases could interleave — the second `set_key`
+/// landing between the first's `set_key` and its attach — and the first
+/// database would be handed the second's key. It fails to attach, which
+/// is the good outcome; the bad one is that it succeeds because the
+/// databases share a key and the user learns nothing about which key
+/// was actually used.
+///
+/// Held across the attach rather than just the write, since the attach
+/// is what reads the slot. Encrypted connects are rare and a user does
+/// not open two at once by accident, so serialising them costs nothing
+/// anyone will notice.
+pub static ATTACH_GATE: Mutex<()> = Mutex::new(());
+
 /// Clears the process-global key slot. Hosts call this after a
 /// successful attach (or any attach failure) so the bytes do not
 /// remain in memory between sessions.
@@ -93,9 +111,9 @@ pub fn register_with(path: &Path) -> Result<(), DbError> {
     let callback_ptr = &raw const CALLBACK as *mut c_void;
     rsfbclient_native::crypt::register_crypt_callback(path.as_os_str(), callback_ptr).map_err(
         |err| match err {
-            rsfbclient_native::crypt::CryptCallbackError::Load(_) => DbError::Driver(format!(
-                "register fb_database_crypt_callback: {err}",
-            )),
+            rsfbclient_native::crypt::CryptCallbackError::Load(_) => {
+                DbError::Driver(format!("register fb_database_crypt_callback: {err}",))
+            }
             rsfbclient_native::crypt::CryptCallbackError::Status(_) => {
                 DbError::Driver(err.to_string())
             }
@@ -119,18 +137,12 @@ pub fn register_with(path: &Path) -> Result<(), DbError> {
 struct ICryptKeyCallbackVTable {
     cloop_dummy: *const c_void,
     version: usize,
-    callback: unsafe extern "C" fn(
-        *mut ICryptKeyCallback,
-        u32,
-        *const c_void,
-        u32,
-        *mut c_void,
-    ) -> u32,
+    callback:
+        unsafe extern "C" fn(*mut ICryptKeyCallback, u32, *const c_void, u32, *mut c_void) -> u32,
     dummy1: unsafe extern "C" fn(*mut ICryptKeyCallback, *mut c_void),
     dummy2: unsafe extern "C" fn(*mut ICryptKeyCallback),
     get_hash_length: unsafe extern "C" fn(*mut ICryptKeyCallback, *mut c_void) -> c_int,
-    get_hash_data:
-        unsafe extern "C" fn(*mut ICryptKeyCallback, *mut c_void, *mut c_void),
+    get_hash_data: unsafe extern "C" fn(*mut ICryptKeyCallback, *mut c_void, *mut c_void),
 }
 
 #[repr(C)]
@@ -172,10 +184,7 @@ unsafe extern "C" fn cb_callback(
 
 unsafe extern "C" fn cb_dummy1(_self: *mut ICryptKeyCallback, _status: *mut c_void) {}
 unsafe extern "C" fn cb_dummy2(_self: *mut ICryptKeyCallback) {}
-unsafe extern "C" fn cb_hash_length(
-    _self: *mut ICryptKeyCallback,
-    _status: *mut c_void,
-) -> c_int {
+unsafe extern "C" fn cb_hash_length(_self: *mut ICryptKeyCallback, _status: *mut c_void) -> c_int {
     0
 }
 unsafe extern "C" fn cb_hash_data(

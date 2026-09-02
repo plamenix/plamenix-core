@@ -58,6 +58,8 @@ fn cell_to_csv(cell: &ColumnValue, delim: char) -> String {
         ColumnValue::Null => String::new(),
         ColumnValue::Text(v) => quote_csv_field(v, delim),
         ColumnValue::Integer(v) => v.to_string(),
+        // Already exact decimal text; emit it verbatim like any number.
+        ColumnValue::Decimal(v) => v.clone(),
         ColumnValue::Float(v) => v.to_string(),
         ColumnValue::Bool(true) => "true".to_string(),
         ColumnValue::Bool(false) => "false".to_string(),
@@ -70,6 +72,9 @@ fn cell_to_sql_literal(cell: &ColumnValue) -> String {
         ColumnValue::Null => "NULL".to_string(),
         ColumnValue::Text(v) => format!("'{}'", v.replace('\'', "''")),
         ColumnValue::Integer(v) => v.to_string(),
+        // Bare numeric literal: quoting would make Firebird re-parse it
+        // as a string on import.
+        ColumnValue::Decimal(v) => v.clone(),
         ColumnValue::Float(v) => v.to_string(),
         ColumnValue::Bool(true) => "TRUE".to_string(),
         ColumnValue::Bool(false) => "FALSE".to_string(),
@@ -97,6 +102,7 @@ fn cell_to_xml_text(cell: &ColumnValue) -> String {
         ColumnValue::Null => String::new(),
         ColumnValue::Text(v) => v.clone(),
         ColumnValue::Integer(v) => v.to_string(),
+        ColumnValue::Decimal(v) => v.clone(),
         ColumnValue::Float(v) => v.to_string(),
         ColumnValue::Bool(true) => "true".to_string(),
         ColumnValue::Bool(false) => "false".to_string(),
@@ -113,6 +119,9 @@ fn cell_to_json(cell: &ColumnValue) -> serde_json::Value {
         ColumnValue::Null => serde_json::Value::Null,
         ColumnValue::Text(v) => serde_json::Value::String(v.clone()),
         ColumnValue::Integer(v) => serde_json::Value::from(*v),
+        // Text, not a JSON number: the exactness would be lost the
+        // moment any JavaScript consumer called JSON.parse.
+        ColumnValue::Decimal(v) => serde_json::Value::String(v.clone()),
         ColumnValue::Float(v) => serde_json::Number::from_f64(*v)
             .map(serde_json::Value::Number)
             .unwrap_or(serde_json::Value::Null),
@@ -186,19 +195,13 @@ pub fn format_csv(parts: &[ExportPart<'_>], delim: CsvDelimiter) -> String {
 pub fn format_json(parts: &[ExportPart<'_>]) -> String {
     if parts.len() == 1 {
         let p = &parts[0];
-        let rows: Vec<serde_json::Value> = p
-            .rows
-            .iter()
-            .map(|r| row_to_object(p.columns, r))
-            .collect();
+        let rows: Vec<serde_json::Value> =
+            p.rows.iter().map(|r| row_to_object(p.columns, r)).collect();
         return serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
     }
     let mut map = serde_json::Map::new();
     for (idx, part) in parts.iter().enumerate() {
-        let key = part
-            .label
-            .clone()
-            .unwrap_or_else(|| idx.to_string());
+        let key = part.label.clone().unwrap_or_else(|| idx.to_string());
         let rows: Vec<serde_json::Value> = part
             .rows
             .iter()
@@ -307,10 +310,7 @@ pub fn format_xml(parts: &[ExportPart<'_>]) -> String {
         out.push_str("<database>\n");
         for part in parts {
             let label = part.label.as_deref().unwrap_or("");
-            out.push_str(&format!(
-                "  <table name=\"{}\">\n",
-                escape_xml(label)
-            ));
+            out.push_str(&format!("  <table name=\"{}\">\n", escape_xml(label)));
             push_xml_rows(&mut out, part.columns, part.rows, "row", "    ");
             out.push_str("  </table>\n");
         }
@@ -379,7 +379,9 @@ mod tests {
     use super::*;
 
     fn col(name: &str) -> Column {
-        Column { name: name.to_string() }
+        Column {
+            name: name.to_string(),
+        }
     }
 
     #[test]
@@ -468,7 +470,9 @@ mod tests {
     fn sql_omits_ddl_when_include_ddl_false() {
         use plamenix_types::TableKind;
         let columns = vec![col("ID")];
-        let rows = vec![Row { cells: vec![ColumnValue::Integer(1)] }];
+        let rows = vec![Row {
+            cells: vec![ColumnValue::Integer(1)],
+        }];
         let table = TableInfo {
             name: "T".into(),
             kind: TableKind::Table,

@@ -14,6 +14,7 @@ name = "CSV Exporter"
 version = "1.0.0"
 plamenix_min_version = ">=1.0.0-beta"
 plugin_api = "1.0"
+world = "plamenix:plugin@1.0.0/plugin-integrated"
 author = "Example <dev@example.org>"
 license = "MIT OR Apache-2.0"
 
@@ -25,7 +26,6 @@ optional = ["net.https.api.example.com"]
 ui = "dist/ui.mjs"
 
 [runtime]
-requires_subprocess = false
 "#;
 
 #[test]
@@ -36,17 +36,17 @@ fn parses_valid_manifest() {
     assert!(
         manifest
             .permissions
-            .required
-            .contains(&Permission::DbReadAny)
+            .required_caps()
+            .any(|p| matches!(p, Permission::DbReadAny))
     );
     assert!(
         manifest
             .permissions
-            .required
-            .contains(&Permission::ExportFormat)
+            .required_caps()
+            .any(|p| matches!(p, Permission::ExportFormat))
     );
     assert!(matches!(
-        manifest.permissions.optional.first(),
+        manifest.permissions.optional.first().map(|g| &g.capability),
         Some(Permission::NetHttpsHost(host)) if host == "api.example.com"
     ));
 }
@@ -79,6 +79,7 @@ name = "X"
 version = "1.0.0"
 plamenix_min_version = ">=1.0.0-beta"
 plugin_api = "1.0"
+world = "plamenix:plugin@1.0.0/plugin-integrated"
 
 [permissions]
 required = ["mystery.deep.access"]
@@ -96,10 +97,6 @@ ui = "ui.mjs"
 #[test]
 fn parses_scoped_capabilities() {
     assert_eq!(
-        Permission::parse("db.read.table.users").unwrap(),
-        Permission::DbReadTable("users".into()),
-    );
-    assert_eq!(
         Permission::parse("net.https.api.example.com").unwrap(),
         Permission::NetHttpsHost("api.example.com".into()),
     );
@@ -107,22 +104,146 @@ fn parses_scoped_capabilities() {
         Permission::parse("fs.read.dir.downloads").unwrap(),
         Permission::FsReadDir(LogicalDir::Downloads),
     );
+}
+
+#[test]
+fn refuses_table_scoped_db_capabilities_and_says_what_to_use() {
+    // They used to parse, and that was the worst of the three options:
+    // no call site accepts the table-scoped form, so the install dialog
+    // asked the user to approve `db.read.table.CUSTOMERS`, they
+    // approved it, and every db call was then denied. A capability a
+    // user can grant that grants nothing makes the permissions dialog
+    // assert something false.
+    //
+    // Enforcing them properly means knowing which tables a statement
+    // touches, which means parsing SQL. Accepting them ungated would
+    // grant everything while naming one table. So they are refused, and
+    // the message names the capability the author should declare.
+    for (input, suggested) in [
+        ("db.read.table.CUSTOMERS", "db.read.any"),
+        ("db.write.table.CUSTOMERS", "db.write.any"),
+        ("db.ddl.table.CUSTOMERS", "db.ddl.any"),
+    ] {
+        let err = Permission::parse(input).expect_err("must be refused");
+        let PluginError::InvalidCapability(cap, reason) = err else {
+            panic!("unexpected variant for {input}");
+        };
+        assert_eq!(cap, input);
+        assert!(
+            reason.contains(suggested),
+            "refusing `{input}` should point the author at `{suggested}`, said: {reason}",
+        );
+    }
+}
+
+#[test]
+fn refuses_a_capability_nothing_implements() {
+    // `os.open-url` was in the grammar and in the world tiering, and
+    // had no host import and no call-site gate anywhere in the
+    // workspace. Same defect as the table scopes: approvable, and
+    // worthless once approved.
+    assert!(Permission::parse("os.open-url").is_err());
+}
+
+#[test]
+fn parses_detailed_permission_grant_with_purpose() {
+    let text = r#"
+[plugin]
+id = "org.example.detailed"
+name = "Detailed"
+version = "1.0.0"
+plamenix_min_version = ">=1.0.0-beta"
+plugin_api = "1.0"
+world = "plamenix:plugin@1.0.0/plugin-integrated"
+
+[permissions]
+required = [
+  { capability = "db.schema.list", purpose = "List tables to choose from" },
+  { capability = "fs.write.dir.plugin-data", purpose = "Cache export progress" },
+]
+
+[entry_points]
+ui = "ui.mjs"
+"#;
+    let manifest = Manifest::parse(text).expect("valid detailed grants");
+    assert_eq!(manifest.permissions.required.len(), 2);
+    let first = &manifest.permissions.required[0];
+    assert_eq!(first.capability, Permission::DbSchemaList);
+    assert_eq!(first.purpose.as_deref(), Some("List tables to choose from"));
+    let second = &manifest.permissions.required[1];
     assert_eq!(
-        Permission::parse("runtime.subprocess").unwrap(),
-        Permission::RuntimeSubprocess,
+        second.capability,
+        Permission::FsWriteDir(LogicalDir::PluginData)
     );
+    assert_eq!(second.purpose.as_deref(), Some("Cache export progress"));
+}
+
+#[test]
+fn parses_mixed_plain_and_detailed_grants_in_same_list() {
+    let text = r#"
+[plugin]
+id = "org.example.mixed"
+name = "Mixed"
+version = "1.0.0"
+plamenix_min_version = ">=1.0.0-beta"
+plugin_api = "1.0"
+world = "plamenix:plugin@1.0.0/plugin-integrated"
+
+[permissions]
+required = [
+  "db.schema.list",
+  { capability = "fs.write.dir.plugin-data", purpose = "Cache export progress" },
+]
+
+[entry_points]
+ui = "ui.mjs"
+"#;
+    let manifest = Manifest::parse(text).expect("valid mixed grants");
+    assert_eq!(manifest.permissions.required.len(), 2);
+    // Plain-string form leaves purpose absent.
+    assert_eq!(
+        manifest.permissions.required[0].capability,
+        Permission::DbSchemaList
+    );
+    assert!(manifest.permissions.required[0].purpose.is_none());
+    // Detailed-object form attaches purpose.
+    assert!(manifest.permissions.required[1].purpose.is_some());
+}
+
+#[test]
+fn empty_purpose_string_treated_as_absent() {
+    let text = r#"
+[plugin]
+id = "org.example.empty"
+name = "Empty"
+version = "1.0.0"
+plamenix_min_version = ">=1.0.0-beta"
+plugin_api = "1.0"
+world = "plamenix:plugin@1.0.0/plugin-integrated"
+
+[permissions]
+required = [{ capability = "db.schema.list", purpose = "" }]
+
+[entry_points]
+ui = "ui.mjs"
+"#;
+    let manifest = Manifest::parse(text).expect("valid manifest");
+    // Empty-string purpose collapses to None, so a blank rationale and
+    // an absent one are treated identically rather than showing the
+    // user an empty line where an explanation should be.
+    assert!(manifest.permissions.required[0].purpose.is_none());
 }
 
 #[test]
 fn permission_set_grants_lookup_covers_both_buckets() {
     let manifest = Manifest::parse(VALID_MANIFEST).unwrap();
-    assert!(manifest.permissions.grants(&Permission::DbReadAny));
+    assert!(manifest.permissions.declares(&Permission::DbReadAny));
     assert!(
         manifest
             .permissions
-            .grants(&Permission::NetHttpsHost("api.example.com".into()))
+            .declares(&Permission::NetHttpsHost("api.example.com".into()))
     );
-    assert!(!manifest.permissions.grants(&Permission::DbWriteAny));
+    assert!(!manifest.permissions.declares(&Permission::DbWriteAny));
 }
 
 #[test]
@@ -177,4 +298,141 @@ ui = "ui.mjs"
         .expect("ui-only plugin should load");
     assert_eq!(staged.manifest.plugin.id, "ui.only");
     assert!(staged.component.is_none());
+}
+
+#[test]
+fn manifest_parses_event_subscriptions() {
+    // I6.2 — manifests with `[contributions]
+    // event_subscriptions = [...]` get parsed + validated. Valid
+    // pattern grammar: slash-segmented with `*` / `**` wildcards.
+    let manifest = r#"
+[plugin]
+id = "com.example.audit"
+name = "Audit"
+version = "1.0.0"
+plamenix_min_version = ">=1.0.0-beta"
+plugin_api = "1.0"
+
+[entry_points]
+ui = "ui.mjs"
+
+[contributions]
+event_subscriptions = ["query/executed", "connection/**", "tab/*"]
+"#;
+    let parsed = Manifest::parse(manifest).expect("valid manifest");
+    assert_eq!(
+        parsed.contributions.event_subscriptions,
+        vec!["query/executed", "connection/**", "tab/*"],
+    );
+}
+
+#[test]
+fn manifest_defaults_event_subscriptions_to_empty_when_absent() {
+    let manifest = r#"
+[plugin]
+id = "com.example.silent"
+name = "Silent"
+version = "1.0.0"
+plamenix_min_version = ">=1.0.0-beta"
+plugin_api = "1.0"
+
+[entry_points]
+ui = "ui.mjs"
+"#;
+    let parsed = Manifest::parse(manifest).expect("valid manifest");
+    assert!(parsed.contributions.event_subscriptions.is_empty());
+}
+
+#[test]
+fn manifest_rejects_empty_event_subscription_pattern() {
+    // I6.2 — empty pattern string fails parse-time validation
+    // (fail-loud beats failing silently at activation).
+    let manifest = r#"
+[plugin]
+id = "com.example.broken"
+name = "Broken"
+version = "1.0.0"
+plamenix_min_version = ">=1.0.0-beta"
+plugin_api = "1.0"
+
+[entry_points]
+ui = "ui.mjs"
+
+[contributions]
+event_subscriptions = [""]
+"#;
+    let err = Manifest::parse(manifest).expect_err("empty pattern must error");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("event_subscriptions") && msg.contains("non-empty"),
+        "expected event_subscriptions validation error, got: {msg}",
+    );
+}
+
+#[test]
+fn an_unknown_contribution_key_is_refused_rather_than_ignored() {
+    // `plugin-manifest.md` promised this and the code did not do it,
+    // which is the worse of the two possible mistakes. Both docs showed
+    // a `[contributions.ui]` section; neither has ever existed. An
+    // author copying it got a manifest that parsed cleanly, a plugin
+    // that contributed nothing, and no error anywhere saying why.
+    let toml = r#"
+[plugin]
+id = "dev.plamenix.typo"
+name = "Typo"
+version = "1.0.0"
+plamenix_min_version = ">=1.0.0-beta"
+plugin_api = "1.0"
+world = "plamenix:plugin@1.0.0/plugin-minimal"
+
+[entry_points]
+ui = "ui.mjs"
+
+[contributions.ui]
+sidebar_panels = []
+"#;
+    let err = Manifest::parse(toml).expect_err("an unknown contribution key must be refused");
+    let message = err.to_string();
+    assert!(
+        message.contains("ui") || message.contains("unknown"),
+        "the refusal should name what it did not recognise, said: {message}",
+    );
+}
+
+#[test]
+fn the_real_contribution_keys_still_parse() {
+    // Guards the guard: `deny_unknown_fields` refusing something real
+    // would be a worse failure than the one it prevents.
+    let toml = r#"
+[plugin]
+id = "dev.plamenix.contributor"
+name = "Contributor"
+version = "1.0.0"
+plamenix_min_version = ">=1.0.0-beta"
+plugin_api = "1.0"
+world = "plamenix:plugin@1.0.0/plugin-db-reader"
+
+[permissions]
+required = [{ capability = "db.read.any" }]
+
+[entry_points]
+wasm = "plugin.wasm"
+
+[contributions]
+event_subscriptions = ["query/executed"]
+
+[[contributions.sidebar_panels]]
+id = "panel"
+label = "Panel"
+
+[[contributions.interceptors]]
+extension_point = "query.executing"
+"#;
+    let manifest = Manifest::parse(toml).expect("the documented keys must parse");
+    assert_eq!(
+        manifest.contributions.event_subscriptions,
+        ["query/executed"]
+    );
+    assert_eq!(manifest.contributions.sidebar_panels.len(), 1);
+    assert_eq!(manifest.contributions.interceptors.len(), 1);
 }

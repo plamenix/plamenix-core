@@ -76,18 +76,14 @@ pub fn resolve_connection_config(
     let runtime_password = runtime.password.as_deref().filter(|s| !s.is_empty());
     let password = match (runtime_password, &profile.password_keyring_ref) {
         (Some(plain), _) => plain.to_owned(),
-        (None, Some(account)) => {
-            secrets.retrieve(&SecretRef::new(service, account.clone()))?
-        }
+        (None, Some(account)) => secrets.retrieve(&SecretRef::new(service, account.clone()))?,
         (None, None) => String::new(),
     };
 
     let runtime_encryption_key = runtime.encryption_key.as_deref().filter(|s| !s.is_empty());
     let encryption_key = match (runtime_encryption_key, &profile.encryption_key_keyring_ref) {
         (Some(plain), _) => Some(plain.to_owned()),
-        (None, Some(account)) => Some(
-            secrets.retrieve(&SecretRef::new(service, account.clone()))?,
-        ),
+        (None, Some(account)) => Some(secrets.retrieve(&SecretRef::new(service, account.clone()))?),
         (None, None) => None,
     };
 
@@ -106,6 +102,9 @@ pub fn resolve_connection_config(
             .charset
             .clone()
             .or_else(|| profile.charset.clone()),
-        encryption_required: overrides.encryption_required.unwrap_or(profile.encryption_required),
+        encryption_required: overrides
+            .encryption_required
+            .unwrap_or(profile.encryption_required),
+        embedded: profile.embedded,
     })
 }

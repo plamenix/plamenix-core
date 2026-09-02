@@ -30,20 +30,81 @@
 pub mod activator;
 pub mod bindings;
 pub mod capability;
+pub mod concurrency;
+pub mod dispatch;
+pub mod epoch;
 pub mod error;
+pub mod event_bus;
+pub mod gate;
 pub mod host;
 pub mod host_impl;
+pub mod imports;
+pub mod instance;
+pub mod interceptor;
+pub mod limits;
+pub mod link;
 pub mod loader;
 pub mod manifest;
-pub mod subprocess;
+pub mod plx;
+pub mod services;
+pub mod signing;
+pub mod supervisor;
+pub mod trap;
+pub mod world;
 
-pub use activator::{ActivationOutcome, activate, activate_with_state};
-pub use capability::{LogicalDir, OsKeyring, Permission, PermissionSet};
+pub use activator::{
+    ActivationOutcome, activate, activate_into_registry, activate_with_state,
+    register_event_subscriptions, register_interceptors, unregister_event_subscriptions,
+    unregister_interceptors,
+};
+pub use capability::{LogicalDir, OsKeyring, Permission, PermissionGrant, PermissionSet};
+pub use concurrency::{CallPermit, InFlightAcquireError, InFlightLimiter, MAX_IN_FLIGHT_DEFAULT};
+pub use dispatch::{
+    Delivery, DispatchOutcome, MAX_EMIT_DEPTH, SupervisedDelivery, dispatch_event,
+    dispatch_event_supervised, required_capability_for_topic,
+};
+pub use epoch::{
+    BACKGROUND_DEADLINE_MS, CallClass, EPOCH_TICK_MS, EpochTicker, INTERACTIVE_DEADLINE_MS,
+};
 pub use error::PluginError;
+pub use event_bus::{EventBus, MatchedSubscriber, matches_pattern, tokenise_pattern};
+pub use gate::{Denial, Guard};
 pub use host::PluginHost;
-pub use host_impl::{HostState, LogLevel, LogSink, RecordedLog, register_host};
+pub use host_impl::{
+    HostState, LogLevel, LogSink, PendingEmit, RecordedLog, SessionSlot, register_host,
+};
+pub use instance::{InstanceRegistry, PluginInstance};
+pub use interceptor::{
+    ExtensionPoint, Interception, InterceptorRegistration, InterceptorRegistry, MAX_PRIORITY,
+    MIN_PLUGIN_PRIORITY, Verdict, intercept_one, intercept_one_supervised, run_chain,
+};
+pub use limits::{
+    DEFAULT_MAX_INSTANCES, DEFAULT_MAX_MEMORIES, DEFAULT_MAX_MEMORY_BYTES,
+    DEFAULT_MAX_TABLE_ELEMENTS, DEFAULT_MAX_TABLES, ResourceLimits, ResourceLimitsBuilder,
+    ResourceLimitsOverride,
+};
+pub use link::register_for_world;
 pub use loader::{StagedPlugin, load};
 pub use manifest::{
-    Contributions, EntryPoints, Manifest, PluginMetadata, RuntimeFlags, SidebarPanel,
+    Contributions, Edition, EntryPoints, Manifest, PluginMetadata, RestartPolicy, RuntimeFlags,
+    RuntimeLimits, SidebarPanel,
 };
-pub use subprocess::activate_subprocess;
+pub use plx::{
+    MANIFEST_NAME, RESOURCES_DIR, UI_NAME, WASM_NAME, extract_plx, extract_plx_bytes,
+    peek_plx_manifest, peek_plx_manifest_bytes, write_plx,
+};
+pub use services::{
+    CallCtx, HostCell, HostColumn, HostHttpRequest, HostHttpResponse, HostQueryResult, HostRow,
+    HostSchema, HostServices, HostStatementOutcome, HostTable, NoServices, ServiceError,
+};
+pub use signing::{
+    ALGORITHM, PluginSignature, SIGNATURE_NAME, VerificationOutcome, compute_archive_digest,
+    embed_signature_into_archive, sign_archive, sign_archive_bytes, verify_archive,
+    verify_archive_bytes,
+};
+pub use supervisor::{
+    CrashBudget, CrashBudgetState, DisableReason, ExitReason, PluginStatus, PluginSupervisionState,
+    RestartDecision, Supervisor,
+};
+pub use trap::{CallFailure, FailureKind};
+pub use world::{PluginWorld, check_permissions, check_targets, parse_world_identifier};

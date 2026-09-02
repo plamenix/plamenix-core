@@ -153,10 +153,11 @@ fn poisoned<T>(_err: T) -> SecretError {
     SecretError::Backend("in-memory store mutex poisoned".into())
 }
 
-/// Plain-text JSON-on-disk [`SecretStore`]. Intended for dev / debug
-/// builds on macOS where the OS keyring's ACL is bound to the binary
-/// hash, so every `cargo build` invalidates "Always Allow" and pops a
-/// password prompt on every restart. Release builds keep using
+/// Plain-text JSON-on-disk [`SecretStore`], for dev / debug builds only.
+///
+/// It exists because on macOS the OS keyring's ACL is bound to the
+/// binary hash, so every `cargo build` invalidates "Always Allow" and
+/// pops a password prompt on every restart. Release builds keep using
 /// [`KeyringStore`].
 ///
 /// Storage is intentionally plain JSON — these are local-dev secrets on
@@ -199,8 +200,8 @@ impl JsonSecretStore {
             if bytes.is_empty() {
                 HashMap::new()
             } else {
-                let list: Vec<(SecretRef, String)> = serde_json::from_slice(&bytes)
-                    .map_err(|err| {
+                let list: Vec<(SecretRef, String)> =
+                    serde_json::from_slice(&bytes).map_err(|err| {
                         SecretError::Backend(format!(
                             "failed to parse secrets file {}: {err}",
                             path.display()
@@ -219,21 +220,37 @@ impl JsonSecretStore {
 
     fn flush(&self, entries: &HashMap<SecretRef, String>) -> Result<(), SecretError> {
         let list: Vec<(&SecretRef, &String)> = entries.iter().collect();
-        let bytes = serde_json::to_vec_pretty(&list).map_err(|err| {
-            SecretError::Backend(format!("failed to serialise secrets: {err}"))
-        })?;
+        let bytes = serde_json::to_vec_pretty(&list)
+            .map_err(|err| SecretError::Backend(format!("failed to serialise secrets: {err}")))?;
         let tmp = self.path.with_extension("json.tmp");
-        fs::write(&tmp, &bytes).map_err(|err| {
+        // Created 0600 rather than written and then chmod'd. The old
+        // order left the secrets world-readable for the window between
+        // the two calls — short, but a local reader only has to poll —
+        // and it discarded the `set_permissions` result, so a failure
+        // left the file at whatever the umask gave and said nothing.
+        // The doc comment on this type promises 0600; this is what
+        // makes it true.
+        #[cfg(unix)]
+        let write_result = {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)
+                .and_then(|mut file| file.write_all(&bytes))
+        };
+        #[cfg(not(unix))]
+        let write_result = fs::write(&tmp, &bytes);
+
+        write_result.map_err(|err| {
             SecretError::Backend(format!(
                 "failed to write secrets temp file {}: {err}",
                 tmp.display()
             ))
         })?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
-        }
         fs::rename(&tmp, &self.path).map_err(|err| {
             SecretError::Backend(format!(
                 "failed to rename secrets temp file into place: {err}"
@@ -247,7 +264,11 @@ impl SecretStore for JsonSecretStore {
     fn store(&self, secret_ref: &SecretRef, secret: &str) -> Result<(), SecretError> {
         let mut entries = self.entries.lock().map_err(poisoned)?;
         entries.insert(secret_ref.clone(), secret.to_owned());
+        // The lock is held across the flush on purpose: `flush` writes
+        // the whole map, so releasing it first would let a concurrent
+        // writer put the file and the map out of step.
         self.flush(&entries)?;
+        drop(entries);
         Ok(())
     }
 
@@ -267,6 +288,7 @@ impl SecretStore for JsonSecretStore {
         if entries.remove(secret_ref).is_some() {
             self.flush(&entries)?;
         }
+        drop(entries);
         Ok(())
     }
 }

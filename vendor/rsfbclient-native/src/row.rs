@@ -89,6 +89,12 @@ pub struct ColumnBuffer {
     col_name: String,
 
     raw_type: i16,
+
+    /// Firebird scale for fixed-point columns: the real value is
+    /// `stored * 10^scale`, negative for NUMERIC/DECIMAL, 0 otherwise.
+    /// Retained so `to_column` can render the exact decimal instead of
+    /// letting the engine round it into a double.
+    scale: i16,
 }
 
 impl ColumnBuffer {
@@ -97,6 +103,9 @@ impl ColumnBuffer {
         // Remove nullable type indicator
         let sqltype = var.sqltype & (!1);
         let sqlsubtype = var.sqlsubtype;
+        // Captured before the match below rewrites `var`, so the scale
+        // of a NUMERIC/DECIMAL column survives the coercion.
+        let sqlscale = var.sqlscale;
 
         let mut nullind = Box::new(0);
         var.sqlind = &mut *nullind;
@@ -136,16 +145,17 @@ impl ColumnBuffer {
             ibase::SQL_SHORT | ibase::SQL_LONG | ibase::SQL_INT64 => {
                 var.sqllen = mem::size_of::<i64>() as i16;
 
-                if var.sqlscale == 0 {
-                    var.sqltype = ibase::SQL_INT64 as i16 + 1;
+                // PLAMENIX PATCH: upstream asks the engine for a double
+                // whenever the scale is non-zero, which is every
+                // NUMERIC/DECIMAL column. Firebird stores those as an
+                // exact scaled integer, so that coercion discards the
+                // exactness inside the driver, before any caller can see
+                // it — NUMERIC(18,4) is the standard money type in
+                // Firebird schemas. Keep the scaled integer; `to_column`
+                // renders the exact decimal using the retained scale.
+                var.sqltype = ibase::SQL_INT64 as i16 + 1;
 
-                    Integer(Box::new(0))
-                } else {
-                    var.sqlscale = 0;
-                    var.sqltype = ibase::SQL_DOUBLE as i16 + 1;
-
-                    Float(Box::new(0.0))
-                }
+                Integer(Box::new(0))
             }
 
             ibase::SQL_FLOAT | ibase::SQL_DOUBLE => {
@@ -259,6 +269,7 @@ impl ColumnBuffer {
             nullind,
             col_name,
             raw_type: sqltype,
+            scale: sqlscale,
         })
     }
 
@@ -280,6 +291,13 @@ impl ColumnBuffer {
 
         let col_type = match &self.buffer {
             Text(varchar) => SqlType::Text(charset.decode(varchar.as_bytes())?),
+
+            // PLAMENIX PATCH: a non-zero scale means NUMERIC or DECIMAL.
+            // `SqlType` has no exact fixed-point variant, so surface the
+            // exact decimal as text — the same treatment INT128 and
+            // DECFLOAT already get below. `raw_type` stays the integer
+            // type code, so a caller can tell this from a real VARCHAR.
+            Integer(i) if self.scale != 0 => SqlType::Text(apply_scale(**i, self.scale)),
 
             Integer(i) => SqlType::Integer(**i),
 
@@ -578,17 +596,17 @@ fn decode_array_element(
         // dtype_short (SMALLINT, i16)
         8 => {
             let v = i16::from_le_bytes(raw[..2].try_into().unwrap_or([0; 2]));
-            apply_scale(v as i64, scale)
+            apply_scale(v as i64, scale.into())
         }
         // dtype_long (INTEGER, i32)
         9 => {
             let v = i32::from_le_bytes(raw[..4].try_into().unwrap_or([0; 4]));
-            apply_scale(v as i64, scale)
+            apply_scale(v as i64, scale.into())
         }
         // dtype_int64 (BIGINT)
         19 => {
             let v = i64::from_le_bytes(raw[..8].try_into().unwrap_or([0; 8]));
-            apply_scale(v, scale)
+            apply_scale(v, scale.into())
         }
         // dtype_real (FLOAT, f32)
         11 => {
@@ -616,21 +634,36 @@ fn decode_array_element(
 }
 
 /// Renders a fixed-point integer using `scale`. Firebird stores
-/// NUMERIC(p,s) as `value * 10^|s|` for s < 0; positive scale is
+/// NUMERIC(p,s) as `value * 10^s` with `s` negative; positive scale is
 /// uncommon but follows the same multiplier on the other side.
-fn apply_scale(v: i64, scale: i8) -> String {
+///
+/// Formats through the digit string rather than dividing: integer
+/// division truncates toward zero, which erased the sign of every value
+/// between -1 and 0 (-5 at scale -4 rendered `0.0005`), and negating
+/// `i64::MIN` overflows.
+fn apply_scale(v: i64, scale: i16) -> String {
     if scale == 0 {
         return v.to_string();
     }
-    if scale < 0 {
-        let factor = 10i64.pow((-(scale as i32)) as u32);
-        let whole = v / factor;
-        let frac = (v % factor).abs();
-        let width = (-(scale as i32)) as usize;
-        return format!("{whole}.{:0>width$}", frac, width = width);
+    let negative = v < 0;
+    let digits = v.unsigned_abs().to_string();
+    let body = if scale > 0 {
+        format!("{digits}{}", "0".repeat(scale as usize))
+    } else {
+        let frac_len = scale.unsigned_abs() as usize;
+        let padded = if digits.len() <= frac_len {
+            format!("{}{digits}", "0".repeat(frac_len - digits.len() + 1))
+        } else {
+            digits
+        };
+        let split = padded.len() - frac_len;
+        format!("{}.{}", &padded[..split], &padded[split..])
+    };
+    if negative {
+        format!("-{body}")
+    } else {
+        body
     }
-    let factor = 10i64.pow(scale as u32);
-    (v.saturating_mul(factor)).to_string()
 }
 
 fn escape_json(s: String) -> String {
@@ -726,23 +759,20 @@ fn format_isc_time(isc_time: u32) -> String {
     format!("{hours:02}:{mins:02}:{secs:02}.{frac:04}")
 }
 
-/// Renders a Firebird timezone id. Per Firebird 4 `TimeZoneUtil`:
-/// values 0..1439 are minutes east of UTC, 1440..2879 are minutes
-/// west of UTC, everything else is a named region (IANA db). Named
-/// regions are surfaced opaquely — resolving the name requires a
-/// call to `MON$TIME_ZONES`, which is out of scope here.
+/// Renders a Firebird timezone id. Per Firebird 4 `TimeZoneUtil`, an
+/// offset zone is stored as its displacement in minutes plus
+/// `ONE_DAY` (1440), so 1440 is UTC, below it is west of UTC and
+/// above it is east. Ids past the offset range are named regions
+/// (IANA db), surfaced opaquely — resolving the name requires a call
+/// to `MON$TIME_ZONES`, which is out of scope here. That includes
+/// Firebird's `GMT_ZONE` (65535), which therefore renders as a region
+/// rather than `+00:00`.
 fn format_tz_id(id: u16) -> String {
-    if id <= 1439 {
-        let minutes = id as i32;
-        let h = minutes / 60;
-        let m = minutes % 60;
-        return format!("+{h:02}:{m:02}");
-    }
     if id <= 2879 {
-        let minutes = id as i32 - 1440;
-        let h = minutes / 60;
-        let m = minutes % 60;
-        return format!("-{h:02}:{m:02}");
+        let displacement = i32::from(id) - 1440;
+        let sign = if displacement < 0 { '-' } else { '+' };
+        let abs = displacement.abs();
+        return format!("{sign}{:02}:{:02}", abs / 60, abs % 60);
     }
     format!("region:{id}")
 }
@@ -768,4 +798,73 @@ fn dec34_to_string(bytes: [u8; 16]) -> String {
     be.reverse();
     let hex: String = be.iter().map(|b| format!("{b:02x}")).collect();
     format!("decfloat34:0x{hex}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Firebird stores an offset zone as `displacement + ONE_DAY`
+    /// (1440), so the pivot is 1440, not 0. Getting this backwards
+    /// renders every offset zone with an inverted sign — a +02:00
+    /// value reads as -02:00, a four-hour error.
+    #[test]
+    fn offset_zones_decode_around_the_1440_pivot() {
+        assert_eq!(format_tz_id(1440), "+00:00");
+        assert_eq!(format_tz_id(1500), "+01:00");
+        assert_eq!(format_tz_id(1560), "+02:00");
+        assert_eq!(format_tz_id(1380), "-01:00");
+        assert_eq!(format_tz_id(1245), "-03:15");
+    }
+
+    #[test]
+    fn offset_zones_cover_the_full_encodable_range() {
+        assert_eq!(format_tz_id(0), "-24:00");
+        assert_eq!(format_tz_id(2879), "+23:59");
+    }
+
+    #[test]
+    fn ids_past_the_offset_range_are_opaque_regions() {
+        assert_eq!(format_tz_id(2880), "region:2880");
+        assert_eq!(format_tz_id(65535), "region:65535");
+    }
+
+    /// NUMERIC/DECIMAL rendering. The previous implementation divided
+    /// by the scale factor, so integer truncation toward zero erased the
+    /// sign of every value between -1 and 0.
+    #[test]
+    fn fixed_point_keeps_the_sign_of_sub_unit_values() {
+        assert_eq!(apply_scale(-5, -4), "-0.0005");
+        assert_eq!(apply_scale(5, -4), "0.0005");
+        assert_eq!(apply_scale(-1, -2), "-0.01");
+    }
+
+    #[test]
+    fn fixed_point_renders_exactly() {
+        assert_eq!(apply_scale(123_456, -4), "12.3456");
+        assert_eq!(apply_scale(0, -2), "0.00");
+        assert_eq!(apply_scale(42, 0), "42");
+        // Past 2^53, where the upstream f64 path loses digits.
+        assert_eq!(apply_scale(999_999_999_999_999_999, -4), "99999999999999.9999");
+    }
+
+    #[test]
+    fn fixed_point_handles_the_range_ends() {
+        // Negating i64::MIN would overflow.
+        assert_eq!(apply_scale(i64::MIN, -2), "-92233720368547758.08");
+        assert_eq!(apply_scale(i64::MAX, 0), i64::MAX.to_string());
+    }
+
+    #[test]
+    fn positive_scale_multiplies_rather_than_truncating() {
+        assert_eq!(apply_scale(5, 2), "500");
+        assert_eq!(apply_scale(-5, 2), "-500");
+    }
+
+    #[test]
+    fn isc_time_keeps_fixed_width_fractional_ticks() {
+        assert_eq!(format_isc_time(0), "00:00:00.0000");
+        assert_eq!(format_isc_time(10_000), "00:00:01.0000");
+        assert_eq!(format_isc_time(45_296_500_0), "12:34:56.5000");
+    }
 }

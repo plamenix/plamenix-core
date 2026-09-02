@@ -99,6 +99,12 @@ pub struct Profile {
     /// see `plamenix_types::ConnectionConfig::charset` for the list.
     #[serde(default)]
     pub charset: Option<String>,
+    /// `true` when the profile attaches via Firebird's embedded engine
+    /// (the `database` field is a local file path; `host`/`port` are
+    /// ignored). Defaults to `false` so legacy profiles continue to
+    /// behave as remote-server connections.
+    #[serde(default)]
+    pub embedded: bool,
 }
 
 impl Profile {
@@ -129,6 +135,7 @@ impl Profile {
             last_disconnected_at: None,
             fbclient_path: None,
             charset: None,
+            embedded: false,
         }
     }
 }

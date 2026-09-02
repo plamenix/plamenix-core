@@ -14,3 +14,7 @@ workspace = true
 serde = { workspace = true }
 uuid = { workspace = true }
 specta = { workspace = true }
+
+[dev-dependencies]
+# Exercises the exact_int wire format against a real JSON codec.
+serde_json = { workspace = true }

@@ -11,15 +11,20 @@
 //! Both end by calling the plugin's `activate` export and mapping the
 //! WIT `activation` variant to [`ActivationOutcome`].
 
+use std::sync::Arc;
+
 use wasmtime::Store;
 use wasmtime::component::Linker;
 
-use crate::bindings::PlamenixPlugin;
+use crate::bindings::PluginBindings;
 use crate::bindings::exports::plamenix::plugin::plugin as wit_plugin;
 use crate::error::PluginError;
+use crate::event_bus::EventBus;
 use crate::host::PluginHost;
-use crate::host_impl::{HostState, register_host};
+use crate::host_impl::HostState;
+use crate::instance::{InstanceRegistry, PluginInstance};
 use crate::loader::StagedPlugin;
+use crate::trap::CallFailure;
 
 /// Outcome of calling a plugin's `activate` export.
 ///
@@ -43,22 +48,12 @@ impl From<wit_plugin::Activation> for ActivationOutcome {
 
 /// Instantiates `staged` with a default host state and calls its
 /// `activate` export.
-///
-/// When the plugin's manifest sets `runtime.requires_subprocess`, the
-/// call is dispatched to [`crate::subprocess::activate_subprocess`]
-/// instead of the WASM pipeline.
-///
-/// # Errors
-///
-/// See [`activate_with_state`] and
-/// [`crate::subprocess::activate_subprocess`].
 #[tracing::instrument(
     name = "plugin.activate",
     skip(host, staged),
     fields(
         plugin_id = %staged.manifest.plugin.id,
         version = %staged.manifest.plugin.version,
-        subprocess = staged.manifest.runtime.requires_subprocess,
     ),
 )]
 pub async fn activate(
@@ -66,9 +61,6 @@ pub async fn activate(
     host_version: &str,
     staged: &StagedPlugin,
 ) -> Result<ActivationOutcome, PluginError> {
-    if staged.manifest.runtime.requires_subprocess {
-        return crate::subprocess::activate_subprocess(host_version, staged).await;
-    }
     let state = HostState::new(&staged.manifest.plugin.id, host_version);
     activate_with_state(host, state, staged).await
 }
@@ -93,20 +85,261 @@ pub async fn activate_with_state(
         return Ok(ActivationOutcome::Ok);
     };
 
-    let mut linker = Linker::<HostState>::new(host.engine());
-    register_host(&mut linker)?;
-
-    let mut store = Store::new(host.engine(), state);
-
-    let bindings = PlamenixPlugin::instantiate_async(&mut store, component, &linker)
-        .await
-        .map_err(|err| PluginError::Runtime(err.to_string()))?;
+    let (mut store, bindings) = instantiate(host, state, staged, component).await?;
 
     let activation = bindings
         .plamenix_plugin_plugin()
         .call_activate(&mut store)
         .await
-        .map_err(|err| PluginError::Runtime(err.to_string()))?;
+        .map_err(|err| PluginError::Runtime(CallFailure::from_error(&err).to_string()))?;
 
     Ok(ActivationOutcome::from(activation))
+}
+
+/// Activate `staged` AND keep the live wasmtime store + bindings
+/// alive after `activate` returns by registering them as a
+/// [`PluginInstance`] in `registry` (I8.2).
+///
+/// Compared to [`activate_with_state`], this variant gives the host
+/// a handle to dispatch later plugin calls (event handlers, command
+/// invocations) into the SAME store the activation ran in — preserving
+/// the plugin's in-memory state across calls.
+///
+/// Behaviour:
+///
+/// - If the plugin has no wasm component (UI-only), no instance is
+///   registered and `Ok(ActivationOutcome::Ok)` is returned.
+/// - If `activate` returns `Failed`, the instance is NOT registered —
+///   the failed plugin's store drops at the end of this call so
+///   nothing in the registry references it. Returning the
+///   `ActivationOutcome::Failed` lets the host's supervisor record
+///   the crash + decide whether to retry.
+/// - If an instance already exists under this plugin id, it is
+///   REPLACED. The previous instance's `Arc` returns to the caller via
+///   the registry's normal drop-on-overwrite path; callers that need
+///   to run the plugin's `deactivate` first MUST call
+///   [`InstanceRegistry::remove`] before invoking this function.
+///
+/// # Errors
+///
+/// Same as [`activate_with_state`], plus [`PluginError::Runtime`]
+/// when the registry's lock is poisoned.
+pub async fn activate_into_registry(
+    host: &PluginHost,
+    state: HostState,
+    staged: &StagedPlugin,
+    registry: &InstanceRegistry,
+) -> Result<ActivationOutcome, PluginError> {
+    let Some(component) = staged.component.as_ref() else {
+        return Ok(ActivationOutcome::Ok);
+    };
+
+    let (mut store, bindings) = instantiate(host, state, staged, component).await?;
+
+    let activation = bindings
+        .plamenix_plugin_plugin()
+        .call_activate(&mut store)
+        .await
+        .map_err(|err| PluginError::Runtime(CallFailure::from_error(&err).to_string()))?;
+
+    let outcome = ActivationOutcome::from(activation);
+    if matches!(outcome, ActivationOutcome::Ok) {
+        // I8.8 — resolve the per-plugin in-flight cap from the
+        // manifest's `[runtime.limits].max_in_flight` on top of the
+        // default. Missing field keeps the default.
+        let in_flight_capacity = staged
+            .manifest
+            .runtime
+            .limits
+            .max_in_flight
+            .unwrap_or(crate::concurrency::MAX_IN_FLIGHT_DEFAULT);
+        let in_flight = crate::concurrency::InFlightLimiter::new(in_flight_capacity);
+        let instance = Arc::new(PluginInstance::with_in_flight_limiter(
+            staged.manifest.plugin.id.clone(),
+            store,
+            bindings,
+            in_flight,
+        ));
+        registry.insert(instance)?;
+    }
+    Ok(outcome)
+}
+
+/// Builds the linker, the store, and the instance for one plugin.
+///
+/// Extracted because the two activation entry points held a
+/// character-for-character copy of it, and every setting below is one
+/// that has to be identical between them — a store missing the epoch
+/// callback or the resource limiter is a sandbox with a hole in it.
+async fn instantiate(
+    host: &PluginHost,
+    state: HostState,
+    staged: &StagedPlugin,
+    component: &wasmtime::component::Component,
+) -> Result<(Store<HostState>, PluginBindings), PluginError> {
+    // Only what the declared world exposes. A component importing more
+    // than this fails to instantiate, which is the enforcement.
+    let mut linker = Linker::<HostState>::new(host.engine());
+    crate::link::register_for_world(&mut linker, staged.manifest.plugin.world_tier)?;
+
+    // I8.6 — resolve the per-store ResourceLimits from the manifest's
+    // `[runtime.limits]` table on top of the I8.6 defaults. The
+    // manifest field is optional; missing keys keep the defaults.
+    let resolved_limits = staged.manifest.runtime.limits.resolve();
+    let state = state.with_resource_limits(resolved_limits);
+    let mut store = Store::new(host.engine(), state);
+    // The closure borrows the limits out of HostState; wasmtime
+    // consults it on every memory.grow / table.grow attempt and when
+    // querying the count caps.
+    store.limiter(|state| &mut state.resource_limits);
+
+    // Repay time the plugin spent waiting on us.
+    //
+    // The deadline is meant to bound how long a plugin *computes*, but
+    // it is measured in wall-clock epochs, so without this a plugin
+    // that asked the host for a 300ms query would be preempted for our
+    // I/O latency — and the supervisor would charge it crash budget for
+    // waiting on our own database. Every host import records what it
+    // spent; when the deadline fires we hand that back and let the call
+    // continue.
+    //
+    // A plugin that is genuinely spinning accrues nothing, so `owed` is
+    // zero and this returns the interrupt exactly as before. That is
+    // what keeps `misbehaving_plugin.rs` honest.
+    store.epoch_deadline_callback(|mut ctx| {
+        let owed = std::mem::take(&mut ctx.data_mut().host_import_ticks);
+        if owed == 0 {
+            return Err(wasmtime::Trap::Interrupt.into());
+        }
+        Ok(wasmtime::UpdateDeadline::Continue(owed))
+    });
+
+    // `activate` is a background-class call: it may allocate, link, and
+    // run setup logic. Dispatched calls set their own class per call.
+    store.set_epoch_deadline(crate::epoch::CallClass::Background.deadline_ticks());
+
+    let bindings = PluginBindings::instantiate_async(&mut store, component, &linker)
+        .await
+        .map_err(|err| instantiation_error(&err))?;
+
+    Ok((store, bindings))
+}
+
+/// Turns wasmtime's missing-import message into one that blames the
+/// right party.
+///
+/// A component importing an interface its declared world does not
+/// expose fails with "a matching implementation was not found in the
+/// linker", which reads as a broken host. It is the plugin reaching
+/// past its own declaration, and the message should say so and name the
+/// world that would have worked.
+fn instantiation_error(err: &wasmtime::Error) -> PluginError {
+    let failure = CallFailure::from_error(err);
+    if let Some(interface) = missing_plamenix_import(&failure.message) {
+        let advice = crate::world::world_exposing(&interface).map_or_else(
+            || "no world in this contract exposes it".to_owned(),
+            |world| format!("declare `{}`", world.name()),
+        );
+        return PluginError::PermissionDenied(format!(
+            "plugin imports `{interface}`, which its declared world does not expose; {advice}",
+        ));
+    }
+    PluginError::Runtime(failure.to_string())
+}
+
+/// Extracts a `plamenix:plugin/<iface>` name from a linker error.
+fn missing_plamenix_import(message: &str) -> Option<String> {
+    const PREFIX: &str = "plamenix:plugin/";
+    let start = message.find(PREFIX)?;
+    let rest = &message[start..];
+    let end = rest
+        .find(|c: char| c == '`' || c == '\'' || c.is_whitespace())
+        .unwrap_or(rest.len());
+    Some(rest[..end].to_owned())
+}
+
+/// Registers every `[[contributions.event_subscriptions]]` entry from
+/// `staged.manifest` against the supplied [`EventBus`] (I6.2).
+/// Call this once after a successful activation so the plugin starts
+/// receiving events. Patterns were validated at manifest parse time,
+/// but `EventBus::subscribe` still returns a `Result` for empty
+/// plugin id / mutex poison cases — propagated as
+/// [`PluginError::Runtime`].
+///
+/// The reciprocal call, [`unregister_event_subscriptions`], runs at
+/// supervisor teardown (or whenever a plugin deactivates).
+///
+/// # Errors
+///
+/// Returns [`PluginError::Runtime`] when `EventBus::subscribe`
+/// rejects an entry — typically because the plugin id is empty
+/// (shouldn't happen post-manifest-validation but defensive) or the
+/// bus mutex is poisoned.
+pub fn register_event_subscriptions(
+    bus: &Arc<EventBus>,
+    staged: &StagedPlugin,
+) -> Result<usize, PluginError> {
+    let plugin_id = &staged.manifest.plugin.id;
+    let mut count = 0;
+    for pattern in &staged.manifest.contributions.event_subscriptions {
+        bus.subscribe(plugin_id.clone(), pattern.clone())
+            .map_err(PluginError::Runtime)?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// Drops every subscription registered under `plugin_id` from the
+/// supplied [`EventBus`] (I6.2). Returns the number of subscriptions
+/// removed. Idempotent — calling on a plugin id with no
+/// subscriptions returns `0`.
+///
+/// Pair with [`register_event_subscriptions`] in the supervisor's
+/// plugin-lifecycle code: subscribe on activate, unsubscribe on
+/// deactivate (or supervisor teardown / crash recovery).
+pub fn unregister_event_subscriptions(bus: &Arc<EventBus>, plugin_id: &str) -> usize {
+    bus.unsubscribe_by_plugin(plugin_id)
+}
+
+/// Registers every `[[contributions.interceptors]]` entry against the
+/// supplied registry. The event-bus pair above, for the control
+/// surface.
+///
+/// Kept separate from activation itself for the same reason
+/// subscriptions are: a plugin whose `activate` fails must not end up
+/// wired into the chain, and the caller is the one that knows whether
+/// activation succeeded.
+///
+/// # Errors
+///
+/// [`PluginError::Runtime`] when the registry lock is poisoned.
+pub fn register_interceptors(
+    registry: &Arc<crate::interceptor::InterceptorRegistry>,
+    staged: &StagedPlugin,
+) -> Result<usize, PluginError> {
+    let plugin_id = &staged.manifest.plugin.id;
+    let mut count = 0;
+    for entry in &staged.manifest.contributions.interceptors {
+        registry.register(crate::interceptor::InterceptorRegistration {
+            plugin_id: plugin_id.clone(),
+            point: entry.point,
+            priority: entry.priority,
+            purpose: entry.purpose.clone(),
+        })?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// Drops every interceptor registration belonging to `plugin_id`.
+/// Idempotent.
+///
+/// # Errors
+///
+/// [`PluginError::Runtime`] when the registry lock is poisoned.
+pub fn unregister_interceptors(
+    registry: &Arc<crate::interceptor::InterceptorRegistry>,
+    plugin_id: &str,
+) -> Result<(), PluginError> {
+    registry.unregister_by_plugin(plugin_id)
 }

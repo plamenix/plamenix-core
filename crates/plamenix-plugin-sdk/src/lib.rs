@@ -3,7 +3,6 @@
 //! `plamenix-plugin-sdk` is the public surface external plugin authors
 //! compile against. It deliberately stays small: WASM plugins drive
 //! wit-bindgen themselves against the bundled WIT contract, and native
-//! subprocess plugins call into [`subprocess::run`] to handle the
 //! activation protocol.
 //!
 //! # WASM plugins
@@ -33,28 +32,14 @@
 //! Target `wasm32-wasip2`; pin `wit-bindgen` to the host's version
 //! (currently 0.46) to dodge ABI drift.
 //!
-//! # Subprocess plugins
-//!
-//! Plugins that opt out of the WASM sandbox (manifest sets
-//! `runtime.requires_subprocess = true`) implement a regular Rust
-//! `main()` and delegate the protocol to [`subprocess::run`]. See
-//! [`subprocess`] for the full quickstart.
-//!
 //! # What ships here vs in the host
 //!
-//! * **Here:** types and helpers a plugin author writes against
-//!   (`Activation`, `Context`, the `run` entry point, logging
-//!   helpers, the WIT file).
-//! * **In `plamenix-plugin-host`:** the parent-side machinery that
-//!   loads bundles, parses manifests, drives wasmtime, and spawns the
-//!   subprocess binary. Plugin authors do not depend on the host
-//!   crate.
+//! * **Here:** the WIT contract a plugin author compiles against.
+//! * **In `plamenix-plugin-host`:** the host-side machinery that
+//!   loads bundles, parses manifests, and drives wasmtime. Plugin
+//!   authors never depend on that crate.
 
 #![forbid(unsafe_code)]
-
-pub mod subprocess;
-
-pub use subprocess::{Activation, Context, log_error, log_info, log_warn, run};
 
 /// The verbatim WIT contract Plamenix plugins target. Embedded as a
 /// `&str` for tooling that wants to consume the schema without

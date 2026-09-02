@@ -12,10 +12,17 @@ build:
 build-release:
     cargo build --workspace --release
 
-# Run every crate's test suite, including doctests.
-test:
+# Run every crate's test suite, including doctests and the vendored
+# driver. The vendor crate is consumed through [patch.crates-io] rather
+# than as a workspace member, so --workspace does not reach its tests.
+test: test-vendor
     cargo test --workspace
     cargo test --workspace --doc
+
+# Run the vendored rsfbclient patches' own unit tests.
+test-vendor:
+    cd vendor/rsfbclient-native && cargo test --lib
+    cd vendor/rsfbclient-rust && cargo test --lib
 
 # Run rustfmt across the whole workspace.
 fmt:

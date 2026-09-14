@@ -610,6 +610,20 @@ pub fn parse_sql_response(
                         sqltype,
                         SqlType::Null,
                     )))
+                // PLAMENIX PATCH: charset subtype 1 is OCTETS — BINARY /
+                // CHAR(n) CHARACTER SET OCTETS columns (Firebird 3+
+                // BINARY(16) UUIDs land here). The bytes are not text in
+                // any connection charset; strict-decoding them crashed
+                // every SELECT that touched the column with "Found
+                // column with an invalid UTF-8 string". Hand the raw
+                // bytes up as `SqlType::Binary` and let the caller
+                // decide how to render them.
+                } else if var.sqlsubtype == 1 {
+                    data.push(ParsedColumn::Complete(Column::new(
+                        var.alias_name.clone(),
+                        sqltype,
+                        SqlType::Binary(d.to_vec()),
+                    )))
                 } else {
                     data.push(ParsedColumn::Complete(Column::new(
                         var.alias_name.clone(),

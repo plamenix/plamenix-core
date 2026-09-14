@@ -95,6 +95,12 @@ pub struct ColumnBuffer {
     /// Retained so `to_column` can render the exact decimal instead of
     /// letting the engine round it into a double.
     scale: i16,
+
+    /// Firebird charset subtype for text columns. `1` is OCTETS:
+    /// BINARY / `CHAR(n) CHARACTER SET OCTETS` columns report it, and
+    /// their bytes are raw data rather than text in any connection
+    /// charset (a Firebird 3+ `BINARY(16)` UUID lands here).
+    charset_id: i16,
 }
 
 impl ColumnBuffer {
@@ -270,6 +276,7 @@ impl ColumnBuffer {
             col_name,
             raw_type: sqltype,
             scale: sqlscale,
+            charset_id: sqlsubtype,
         })
     }
 
@@ -290,6 +297,16 @@ impl ColumnBuffer {
         }
 
         let col_type = match &self.buffer {
+            // PLAMENIX PATCH: an OCTETS column (charset subtype 1) is
+            // raw bytes — BINARY(n) / CHAR(n) CHARACTER SET OCTETS.
+            // Strict-decoding them in the connection charset crashed
+            // every SELECT touching the column ("Found column with an
+            // invalid UTF-8 string"); hand the bytes up as
+            // `SqlType::Binary` and let the caller render them.
+            Text(varchar) if self.charset_id == 1 => {
+                SqlType::Binary(varchar.as_bytes().to_vec())
+            }
+
             Text(varchar) => SqlType::Text(charset.decode(varchar.as_bytes())?),
 
             // PLAMENIX PATCH: a non-zero scale means NUMERIC or DECIMAL.

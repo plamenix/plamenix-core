@@ -25,9 +25,9 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use plamenix_types::{
-    AttachmentInfo, ColumnInfo, ConnectionConfig, DatabaseStats, DomainInfo, GeneratorInfo,
-    MonDatabase, ProcedureInfo, Schema, SessionId, StatementInfo, TableInfo, TableKind,
-    TriggerInfo,
+    AttachmentInfo, ColumnInfo, ConnectionConfig, DatabaseStats, DomainInfo, FunctionInfo,
+    GeneratorInfo, MonDatabase, ProcedureInfo, Schema, SessionId, StatementInfo, TableInfo,
+    TableKind, TriggerInfo,
 };
 use rsfbclient::prelude::{
     TrDataAccessMode, TrIsolationLevel, TrLockResolution, TrRecordVersion, TransactionConfiguration,
@@ -1067,6 +1067,7 @@ fn run_describe_schema(conn: &mut SimpleConnection) -> Result<Schema, DbError> {
     let triggers = run_describe_triggers(conn).unwrap_or_default();
     let generators = run_describe_generators(conn).unwrap_or_default();
     let domains = run_describe_domains(conn).unwrap_or_default();
+    let functions = run_describe_functions(conn).unwrap_or_default();
 
     Ok(Schema {
         tables,
@@ -1074,7 +1075,41 @@ fn run_describe_schema(conn: &mut SimpleConnection) -> Result<Schema, DbError> {
         triggers,
         generators,
         domains,
+        functions,
     })
+}
+
+/// Functions from `RDB$FUNCTIONS`: legacy external (UDF) and, on
+/// Firebird 3+, PSQL stored functions — both live in that one table.
+/// `RDB$MODULE_NAME` is populated only for UDFs, which is what tells
+/// the two kinds apart.
+fn run_describe_functions(conn: &mut SimpleConnection) -> Result<Vec<FunctionInfo>, DbError> {
+    let rows: Vec<RsfbRow> = conn
+        .query(
+            "SELECT TRIM(f.RDB$FUNCTION_NAME), \
+             COALESCE(TRIM(f.RDB$MODULE_NAME), '') \
+             FROM RDB$FUNCTIONS f \
+             WHERE COALESCE(f.RDB$SYSTEM_FLAG, 0) = 0 \
+             ORDER BY f.RDB$FUNCTION_NAME",
+            (),
+        )
+        .map_err(DbError::from)?;
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let name = match row.cols.first().map(|c| &c.value) {
+            Some(SqlType::Text(n)) => n.clone(),
+            _ => continue,
+        };
+        let module = match row.cols.get(1).map(|c| &c.value) {
+            Some(SqlType::Text(m)) => m.clone(),
+            _ => String::new(),
+        };
+        out.push(FunctionInfo {
+            name,
+            udf: !module.is_empty(),
+        });
+    }
+    Ok(out)
 }
 
 fn run_describe_procedures(conn: &mut SimpleConnection) -> Result<Vec<ProcedureInfo>, DbError> {

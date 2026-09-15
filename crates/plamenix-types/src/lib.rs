@@ -209,6 +209,10 @@ pub struct Schema {
     /// `RDB$N`-named domains that back regular columns).
     #[serde(default)]
     pub domains: Vec<DomainInfo>,
+    /// Functions — legacy UDFs and PSQL stored functions — from
+    /// `RDB$FUNCTIONS` (system flag = 0).
+    #[serde(default)]
+    pub functions: Vec<FunctionInfo>,
 }
 
 /// One stored procedure.
@@ -222,6 +226,20 @@ pub struct ProcedureInfo {
     /// Number of declared output parameters. `0` for executable
     /// procedures with no `RETURNS` clause.
     pub output_count: i32,
+}
+
+/// One function — a legacy external (UDF) or a PSQL stored function.
+#[derive(Clone, Debug, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FunctionInfo {
+    /// Function name as Firebird stores it.
+    pub name: String,
+    /// `true` for a legacy external function (UDF — declared with
+    /// `DECLARE EXTERNAL FUNCTION`, backed by a module entry point),
+    /// `false` for a PSQL stored function (`CREATE FUNCTION`,
+    /// Firebird 3+). Derived from `RDB$MODULE_NAME`: only UDFs are
+    /// backed by a module.
+    pub udf: bool,
 }
 
 /// One trigger row.

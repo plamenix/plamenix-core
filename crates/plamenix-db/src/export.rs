@@ -114,6 +114,22 @@ fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
+/// Quotes an identifier only when it is not a plain dialect-3 name —
+/// domain names render as `D_UUID`, not `"D_UUID"`, matching what the
+/// user wrote when creating them.
+fn quote_if_plain(name: &str) -> String {
+    let plain = !name.is_empty()
+        && name.chars().next().is_some_and(|c| c.is_ascii_uppercase() || c == '_')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+    if plain {
+        name.to_string()
+    } else {
+        quote_ident(name)
+    }
+}
+
 fn cell_to_json(cell: &ColumnValue) -> serde_json::Value {
     match cell {
         ColumnValue::Null => serde_json::Value::Null,
@@ -285,7 +301,16 @@ fn build_create_table(table: &TableInfo) -> String {
                 .as_deref()
                 .map(|d| format!(" DEFAULT {d}"))
                 .unwrap_or_default();
-            format!("    {} {}{}{}", quote_ident(&c.name), c.sql_type, def, null)
+            // A domain-based column re-declares the domain, not the
+            // domain's expansion: re-running expanded DDL would detach
+            // the column from its domain. `sql_type` stays the base
+            // type for type-aware callers; only DDL rendering prefers
+            // the domain.
+            let type_name = c
+                .domain
+                .as_ref()
+                .map_or_else(|| c.sql_type.clone(), |domain| quote_if_plain(domain));
+            format!("    {} {}{}{}", quote_ident(&c.name), type_name, def, null)
         })
         .collect();
     if !table.primary_key.is_empty() {
@@ -482,6 +507,7 @@ mod tests {
                 sql_type: "INTEGER".into(),
                 nullable: false,
                 default_expr: None,
+                domain: None,
             }],
             primary_key: vec!["ID".into()],
         };
@@ -506,6 +532,60 @@ mod tests {
         assert!(with_ddl.contains("CREATE TABLE"));
         assert!(!no_ddl.contains("CREATE TABLE"));
         assert!(no_ddl.contains("INSERT INTO"));
+    }
+
+    #[test]
+    fn ddl_redeclares_the_domain_a_column_is_based_on() {
+        // Expanding `D_UUID` into `CHAR(16)` — the pre-fix behaviour —
+        // detached the column from its domain the next time the export
+        // was re-run (plamenix-desktop#4). The domain wins in DDL;
+        // `sql_type` is metadata for type-aware callers only.
+        let table = TableInfo {
+            name: "TBLUUIDTEST".into(),
+            kind: plamenix_types::TableKind::Table,
+            columns: vec![
+                ColumnInfo {
+                    name: "userUuid".into(),
+                    position: 0,
+                    sql_type: "CHAR(16)".into(),
+                    nullable: false,
+                    default_expr: None,
+                    domain: Some("D_UUID".into()),
+                },
+                ColumnInfo {
+                    name: "NOTE".into(),
+                    position: 1,
+                    sql_type: "VARCHAR(100)".into(),
+                    nullable: true,
+                    default_expr: None,
+                    domain: None,
+                },
+            ],
+            primary_key: vec![],
+        };
+        let out = build_create_table(&table);
+        assert!(out.contains("\"userUuid\" D_UUID NOT NULL"), "{out}");
+        assert!(!out.contains("CHAR(16)"), "{out}");
+        assert!(out.contains("\"NOTE\" VARCHAR(100)"), "{out}");
+    }
+
+    #[test]
+    fn ddl_quotes_a_domain_whose_name_is_not_a_plain_identifier() {
+        let table = TableInfo {
+            name: "T".into(),
+            kind: plamenix_types::TableKind::Table,
+            columns: vec![ColumnInfo {
+                name: "V".into(),
+                position: 0,
+                sql_type: "VARCHAR(10)".into(),
+                nullable: true,
+                default_expr: None,
+                domain: Some("d lower".into()),
+            }],
+            primary_key: vec![],
+        };
+        let out = build_create_table(&table);
+        assert!(out.contains("\"V\" \"d lower\""), "{out}");
     }
 
     #[test]

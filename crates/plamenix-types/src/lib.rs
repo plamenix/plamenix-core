@@ -318,6 +318,20 @@ pub struct ColumnInfo {
     /// `RDB$FIELDS.RDB$DEFAULT_SOURCE` (domain default).
     #[serde(default)]
     pub default_expr: Option<String>,
+    /// Name of the user-defined domain the column is based on —
+    /// `RDB$RELATION_FIELDS.RDB$FIELD_SOURCE` when it names a domain
+    /// rather than an internal `RDB$<n>` field. `None` when the column
+    /// declares its type inline.
+    ///
+    /// Deliberately separate from `sql_type`, which stays the resolved
+    /// base type: type-aware behaviour (numeric/boolean literals,
+    /// editors) must keep seeing the real type even when the column is
+    /// declared as `MONEY NUMERIC(18,4)`-style domain, while DDL
+    /// regeneration must render `D_UUID`, not the domain's expansion —
+    /// re-running expanded DDL silently detaches the column from its
+    /// domain (plamenix-desktop#4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
 }
 
 /// Result of a `db_test_connection` request.

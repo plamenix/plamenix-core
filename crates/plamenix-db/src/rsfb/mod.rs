@@ -957,7 +957,8 @@ fn run_describe_schema(conn: &mut SimpleConnection) -> Result<Schema, DbError> {
              f.RDB$FIELD_TYPE, f.RDB$FIELD_SUB_TYPE, f.RDB$FIELD_LENGTH, \
              COALESCE(f.RDB$DIMENSIONS, 0), \
              CAST(COALESCE(rf.RDB$DEFAULT_SOURCE, f.RDB$DEFAULT_SOURCE) AS VARCHAR(4000)), \
-             f.RDB$FIELD_PRECISION, COALESCE(f.RDB$FIELD_SCALE, 0), f.RDB$CHARACTER_LENGTH \
+             f.RDB$FIELD_PRECISION, COALESCE(f.RDB$FIELD_SCALE, 0), f.RDB$CHARACTER_LENGTH, \
+             TRIM(rf.RDB$FIELD_SOURCE) \
              FROM RDB$RELATIONS r \
              LEFT JOIN RDB$RELATION_FIELDS rf ON rf.RDB$RELATION_NAME = r.RDB$RELATION_NAME \
              LEFT JOIN RDB$FIELDS f ON f.RDB$FIELD_NAME = rf.RDB$FIELD_SOURCE \
@@ -1041,6 +1042,20 @@ fn run_describe_schema(conn: &mut SimpleConnection) -> Result<Schema, DbError> {
             Some(SqlType::Integer(value)) => Some(*value),
             _ => None,
         };
+        // `RDB$FIELD_SOURCE` names the domain a column is based on, or
+        // an internal `RDB$<n>` field when the column declares its type
+        // inline. Rendered DDL must keep the domain name — expanding it
+        // to the base type would detach the column from the domain on a
+        // re-run — while `sql_type` stays the resolved base type so
+        // type-aware callers don't change behaviour.
+        let domain = match row.cols.get(13).map(|c| &c.value) {
+            Some(SqlType::Text(source))
+                if !source.is_empty() && !source.starts_with("RDB$") =>
+            {
+                Some(source.clone())
+            }
+            _ => None,
+        };
 
         if let (Some(name), Some(pos), Some(ft)) = (col_name, position, field_type) {
             let nullable = null_flag.unwrap_or(0) == 0;
@@ -1059,6 +1074,7 @@ fn run_describe_schema(conn: &mut SimpleConnection) -> Result<Schema, DbError> {
                 sql_type,
                 nullable,
                 default_expr,
+                domain,
             });
         }
     }
